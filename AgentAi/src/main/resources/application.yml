@@ -1,0 +1,72 @@
+spring:
+  application:
+    name: requirement-analysis-service
+
+  # 通义千问（用于需求、架构）使用 DashScope API Key
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY}   # 用于 Qwen 模型调用
+      chat:
+        model: qwen-plus
+        temperature: 0.4
+        max-tokens: 8000
+        top-p: 0.9
+      max-retry: 3
+
+
+agent-output:
+  root: "D:/AgentAI_Output"
+
+# 智能体业务配置
+agent:
+  ai:
+    coder:
+      # 启用编码智能体
+      enabled: true
+      # --- AnythingLLM 配置 ---
+      base-url: "http://localhost:3001"
+      workspace-slug: "82ee944e-b422-48e8-89e4-7c6d3a1e317a" # 这是您截图中显示的slug
+      api-key: "EHAAM3W-KGBMB59-GYG5HVA-PVQ4G1F" # 这是您截图中的API Key
+      timeout-ms: 60000
+      max-retry: 2
+
+    document-storage:
+      # path 不再是独立配置，而是由 output-root + 子目录构成
+      suffix: .md
+      encoding: UTF-8
+      overwrite: true
+      max-file-name-length: 50
+
+    code-storage:
+      # 同上，不再独立配置 path
+      suffix: .java
+      encoding: UTF-8
+      overwrite: true
+      max-file-name-length: 50
+
+    requirement:
+      required-sections:
+        - "## 需求背景与目标"
+        - "## 目标用户与核心场景"
+        - "## 核心功能需求"
+        - "## 非功能需求"
+        - "## 需求优先级"
+        - "## 验收标准"
+        - "## 数据字典"
+      check-mermaid: true
+      min-data-dict-rows: 5
+
+    architect:
+      required-sections:
+        - "## 系统架构总览"
+        - "## 技术栈选型"
+        - "## 模块划分与职责"
+        - "## 接口定义（RESTful）"
+        - "## 数据库设计（核心表）"
+        - "## 部署架构"
+        - "## 性能/安全设计"
+      min-api-count: 5
+      min-db-table-count: 3
+
+server:
+  port: 8080

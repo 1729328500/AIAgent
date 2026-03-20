@@ -1,0 +1,21 @@
+### 生成需求分析文档接口测试
+POST http://127.0.0.1:8080/api/requirement
+Content-Type: application/json
+
+{
+  "project_name": "电商平台订单模块开发",
+  "project_type": "后端开发",
+  "core_requirement": "实现订单的创建、支付、取消、查询功能，对接支付网关，保证数据一致性",
+  "stakeholders": ["产品经理", "后端开发工程师", "测试工程师", "运维工程师"]
+}
+
+### （可选）测试空参数场景（验证接口参数校验）
+POST http://127.0.0.1:8080/api/requirement
+Content-Type: application/json
+
+{
+  "project_name": "",
+  "project_type": "",
+  "core_requirement": "",
+  "stakeholders": []
+}
