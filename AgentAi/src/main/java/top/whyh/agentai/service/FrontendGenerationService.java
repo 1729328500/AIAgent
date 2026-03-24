@@ -22,14 +22,22 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 @Slf4j
 public class FrontendGenerationService {
+
     private final CoderAgentConfig coderConfig;
     private final RestTemplate restTemplate = new RestTemplate();
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final Pattern FILE_BLOCK_PATTERN = Pattern.compile("\\[FILE_START\\]\\s*(.+?)\\s*\\n(.*?)\\s*\\[FILE_END\\]", Pattern.DOTALL | Pattern.MULTILINE);
+    private static final Pattern FILE_BLOCK_PATTERN = Pattern.compile(
+            "\\[FILE_START\\]\\s*(.+?)\\s*\\n(.*?)\\s*\\[FILE_END\\]",
+            Pattern.DOTALL | Pattern.MULTILINE
+    );
 
-    public Map<String, String> generateFrontendFiles(String systemName, String prdContent, String archContent, Map<String, String> backendFiles) throws GraphRunnerException {
+    public Map<String, String> generateFrontendFiles(String systemName,
+                                                     String prdContent,
+                                                     String archContent,
+                                                     Map<String, String> backendFiles) throws GraphRunnerException {
         String apiSpec = extractApiSpecFromBackend(backendFiles);
         String prompt = buildFrontendPrompt(systemName, prdContent, archContent, apiSpec);
+
         Map<String, String> variables = new HashMap<>();
         variables.put("project.name", systemName);
         variables.put("required.files", """
@@ -39,29 +47,34 @@ public class FrontendGenerationService {
         - frontend/src/App.vue
         - frontend/src/**/*
         """);
+
         String raw = callAnythingLLM(prompt, variables, systemName);
         Map<String, String> files = parseFiles(raw);
+
         if (!files.containsKey("frontend/package.json")
                 || !files.containsKey("frontend/vite.config.js")
                 || !files.containsKey("frontend/src/main.js")
                 || !files.containsKey("frontend/src/App.vue")) {
             throw new GraphRunnerException("前端生成失败：缺少必需的前端文件");
         }
+
         return files.entrySet().stream()
                 .filter(e -> e.getKey().startsWith("frontend/"))
                 .collect(LinkedHashMap::new, (m, e) -> m.put(e.getKey(), e.getValue()), LinkedHashMap::putAll);
     }
 
     private String callAnythingLLM(String userPrompt, Map<String, String> variables, String systemName) throws GraphRunnerException {
-        String url = String.format("%s/api/v1/workspace/%s/chat",
+        String url = String.format(
+                "%s/api/v1/workspace/%s/chat",
                 coderConfig.getBaseUrl().replaceAll("/+$", ""),
-                coderConfig.getWorkspaceSlug());
+                coderConfig.getWorkspaceSlug()
+        );
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("message", userPrompt);
         requestBody.put("max_tokens", 8192);
         requestBody.put("stream", false);
         requestBody.put("mode", "chat");
-        requestBody.put("sessionId", "agent-session-" + System.currentTimeMillis());
+        requestBody.put("sessionId", "fe-agent-session-" + System.currentTimeMillis());
         requestBody.put("variables", variables);
 
         HttpHeaders headers = new HttpHeaders();
@@ -78,12 +91,14 @@ public class FrontendGenerationService {
                 JsonNode textNode = root.path("textResponse");
                 if (!textNode.isMissingNode() && !textNode.asText().isEmpty()) {
                     String code = textNode.asText();
-                    log.info("代码生成成功，长度：{} 字符", code.length());
+                    log.info("✅ 前端代码生成成功，长度：{} 字符", code.length());
                     return code;
                 }
                 throw new GraphRunnerException("AnythingLLM 响应中无有效代码输出: " + response.getBody());
             }
-            throw new GraphRunnerException(String.format("调用 AnythingLLM 失败 [%s]: %s", response.getStatusCode(), response.getBody()));
+            throw new GraphRunnerException(
+                    String.format("调用 AnythingLLM 失败 [%s]: %s", response.getStatusCode(), response.getBody())
+            );
         } catch (RestClientException e) {
             log.error("网络异常", e);
             throw new GraphRunnerException("调用 AnythingLLM 失败：" + e.getMessage(), e);
@@ -101,13 +116,17 @@ public class FrontendGenerationService {
             foundAnyFile = true;
             String filePath = matcher.group(1).trim();
             String fileContent = matcher.group(2);
-            String normalizedPath = filePath.replace('\\', '/').replaceAll("^/+", "");
+            String normalizedPath = filePath
+                    .replace('\\', '/')
+                    .replaceAll("^/+", "");
             if (normalizedPath.isEmpty() || normalizedPath.contains("..")) {
+                log.warn("跳过无效或危险的文件路径: {}", filePath);
                 continue;
             }
             projectFiles.put(normalizedPath, fileContent);
         }
         if (!foundAnyFile) {
+            log.warn("AI 响应中未找到任何符合 [FILE_START]/[FILE_END] 格式的文件块。原始响应:\n{}", rawResponse);
             throw new GraphRunnerException("AI 未按指定格式输出文件，请检查提示词或模型行为。");
         }
         return projectFiles;
@@ -115,7 +134,7 @@ public class FrontendGenerationService {
 
     private String extractApiSpecFromBackend(Map<String, String> backendFiles) {
         StringBuilder sb = new StringBuilder();
-        sb.append("后端已生成的接口如下：\n");
+        sb.append("后端已生成的接口如下（供前端调用）：\n");
         backendFiles.forEach((path, content) -> {
             if (path.startsWith("backend/src/main/java/") && path.contains("/controller/")) {
                 Pattern classMapping = Pattern.compile("@RequestMapping\\(\"([^\"]+)\"\\)");
@@ -127,13 +146,21 @@ public class FrontendGenerationService {
                 String base = "";
                 if (cm.find()) base = cm.group(1);
                 Matcher mg = methodGet.matcher(content);
-                while (mg.find()) sb.append("- GET ").append(base).append(mg.group(1)).append("\n");
+                while (mg.find()) {
+                    sb.append("- GET ").append(base).append(mg.group(1)).append("\n");
+                }
                 Matcher mp = methodPost.matcher(content);
-                while (mp.find()) sb.append("- POST ").append(base).append(mp.group(1)).append("\n");
+                while (mp.find()) {
+                    sb.append("- POST ").append(base).append(mp.group(1)).append("\n");
+                }
                 Matcher mu = methodPut.matcher(content);
-                while (mu.find()) sb.append("- PUT ").append(base).append(mu.group(1)).append("\n");
+                while (mu.find()) {
+                    sb.append("- PUT ").append(base).append(mu.group(1)).append("\n");
+                }
                 Matcher md = methodDelete.matcher(content);
-                while (md.find()) sb.append("- DELETE ").append(base).append(md.group(1)).append("\n");
+                while (md.find()) {
+                    sb.append("- DELETE ").append(base).append(md.group(1)).append("\n");
+                }
             }
         });
         return sb.toString();

@@ -359,6 +359,4 @@ public class CodeGenerationService {
                 %s
                 """, systemName, prdContent, archContent);
     }
-
-    // 前端生成逻辑已移至 FrontendGenerationService
 }

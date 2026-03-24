@@ -41,7 +41,7 @@ public class AgentOrchestrator {
     private final RequirementAnalysisService requirementService;
     private final ArchitectAnalysisService architectService;
     private final CodeGenerationService codeGenerationService;
-    private final CodeOutputService codeOutputService;
+    private final CodeOutputService codeOutputService; // ← 新增注入
     private final FrontendGenerationService frontendGenerationService;
 
 
