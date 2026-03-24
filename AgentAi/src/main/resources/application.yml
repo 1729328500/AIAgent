@@ -15,7 +15,7 @@ spring:
 
 
 agent-output:
-  root: "D:/AgentAI_Output"
+  root: "E:/AgentAI_Output"
 
 # 智能体业务配置
 agent:

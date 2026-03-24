@@ -13,6 +13,7 @@ import top.whyh.agentai.service.ArchitectAnalysisService;
 import top.whyh.agentai.service.CodeGenerationService;
 import top.whyh.agentai.service.CodeOutputService;
 import top.whyh.agentai.service.RequirementAnalysisService;
+import top.whyh.agentai.service.FrontendGenerationService;
 
 import java.util.List;
 import java.util.Map;
@@ -40,7 +41,8 @@ public class AgentOrchestrator {
     private final RequirementAnalysisService requirementService;
     private final ArchitectAnalysisService architectService;
     private final CodeGenerationService codeGenerationService;
-    private final CodeOutputService codeOutputService; // ← 新增注入
+    private final CodeOutputService codeOutputService;
+    private final FrontendGenerationService frontendGenerationService;
 
 
     /**
@@ -77,19 +79,35 @@ public class AgentOrchestrator {
             long archCost = System.currentTimeMillis() - archStart;
             log.info("架构文档生成完成 | requestId: {} | 耗时: {}ms | 存储路径: {}", requestId, archCost, archResult.getStoragePath());
 
-            // ========== 关键修改区域开始 ==========
-            // 5. 调用编程师智能体生成【完整项目文件映射】
-            log.info("开始生成完整项目代码 | requestId: {} | 系统名称: {}", requestId, systemName);
-            long codeStart = System.currentTimeMillis();
-
-            // 👇 调用新方法，返回 Map<文件路径, 文件内容>
-            Map<String, String> projectFiles = codeGenerationService.generateProjectFiles(
+            // ========== 关键修改区域开始：后端 → 前端 两阶段 ==========
+            // 5. 先生成后端
+            log.info("开始生成后端代码 | requestId: {} | 系统名称: {}", requestId, systemName);
+            long backendStart = System.currentTimeMillis();
+            Map<String, String> backendFiles = codeGenerationService.generateBackendFiles(
                     systemName,
                     prdResult.getDocumentContent(),
                     archResult.getDocumentContent()
             );
-            long codeCost = System.currentTimeMillis() - codeStart;
-            log.info("项目代码生成完成 | requestId: {} | 耗时: {}ms | 文件数量: {}", requestId, codeCost, projectFiles.size());
+            long backendCost = System.currentTimeMillis() - backendStart;
+            log.info("后端代码生成完成 | requestId: {} | 耗时: {}ms | 文件数量: {}", requestId, backendCost, backendFiles.size());
+
+            // 6. 再生成前端（依据已生成后端接口）
+            log.info("开始生成前端代码 | requestId: {} | 系统名称: {}", requestId, systemName);
+            long frontendStart = System.currentTimeMillis();
+            Map<String, String> frontendFiles = frontendGenerationService.generateFrontendFiles(
+                    systemName,
+                    prdResult.getDocumentContent(),
+                    archResult.getDocumentContent(),
+                    backendFiles
+            );
+            long frontendCost = System.currentTimeMillis() - frontendStart;
+            log.info("前端代码生成完成 | requestId: {} | 耗时: {}ms | 文件数量: {}", requestId, frontendCost, frontendFiles.size());
+
+            // 合并前后端文件
+            Map<String, String> projectFiles = new java.util.LinkedHashMap<>();
+            projectFiles.putAll(backendFiles);
+            projectFiles.putAll(frontendFiles);
+            log.info("项目代码合并完成 | requestId: {} | 文件总数: {}", requestId, projectFiles.size());
 
             // 6. 保存整个项目到 D 盘指定目录
             String projectRootPath = codeOutputService.saveGeneratedProject(systemName, projectFiles);

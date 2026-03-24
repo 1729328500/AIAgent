@@ -282,7 +282,7 @@ public class ArchitectAnalysisService {
     private String saveDocumentToFile(String systemName, String documentId, String content) {
         try {
             // 1. 构建存储目录
-            Path storageDir = Paths.get(outputConfig.getPrdStoragePath());
+            Path storageDir = Paths.get(outputConfig.getArchStoragePath());
             if (!Files.exists(storageDir)) {
                 Files.createDirectories(storageDir);
             }
