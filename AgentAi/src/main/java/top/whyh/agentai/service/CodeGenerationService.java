@@ -169,7 +169,7 @@ public class CodeGenerationService {
         );
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("message", userPrompt);
-        requestBody.put("max_tokens", 8192);
+        requestBody.put("max_tokens", 30000);
         requestBody.put("stream", false);
         requestBody.put("mode", "chat");
         requestBody.put("sessionId", "agent-session-" + System.currentTimeMillis());

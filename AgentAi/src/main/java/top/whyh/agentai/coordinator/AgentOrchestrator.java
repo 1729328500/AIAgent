@@ -12,11 +12,18 @@ import top.whyh.agentai.result.SystemGenerateResult;
 import top.whyh.agentai.service.ArchitectAnalysisService;
 import top.whyh.agentai.service.CodeGenerationService;
 import top.whyh.agentai.service.CodeOutputService;
-import top.whyh.agentai.service.RequirementAnalysisService;
 import top.whyh.agentai.service.FrontendGenerationService;
+import top.whyh.agentai.service.RequirementAnalysisService;
+import top.whyh.agentai.service.codegen.BackendControllerGenerator;
+import top.whyh.agentai.service.codegen.BackendDomainGenerator;
+import top.whyh.agentai.service.codegen.BackendSkeletonGenerator;
+import top.whyh.agentai.service.codegen.FrontendApiGenerator;
+import top.whyh.agentai.service.codegen.FrontendSkeletonGenerator;
+import top.whyh.agentai.service.codegen.FrontendViewsGenerator;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,6 +50,12 @@ public class AgentOrchestrator {
     private final CodeGenerationService codeGenerationService;
     private final CodeOutputService codeOutputService; // ← 新增注入
     private final FrontendGenerationService frontendGenerationService;
+    private final BackendSkeletonGenerator backendSkeletonGenerator;
+    private final BackendControllerGenerator backendControllerGenerator;
+    private final BackendDomainGenerator backendDomainGenerator;
+    private final FrontendSkeletonGenerator frontendSkeletonGenerator;
+    private final FrontendViewsGenerator frontendViewsGenerator;
+    private final FrontendApiGenerator frontendApiGenerator;
 
 
     /**
@@ -54,6 +67,13 @@ public class AgentOrchestrator {
      * 执行全流程：解析输入 → 生成PRD → 生成架构文档 → 生成完整项目
      */
     public SystemGenerateResult executeFullFlow(String userInput) {
+        return executeFullFlow(userInput, null);
+    }
+
+    /**
+     * 执行全流程，支持进度回调
+     */
+    public SystemGenerateResult executeFullFlow(String userInput, Consumer<String> progressListener) {
         long startTime = System.currentTimeMillis();
         String requestId = generateShortRequestId();
         log.info("开始执行智能体全流程 | requestId: {} | 用户输入: {}", requestId, maskSensitiveInput(userInput));
@@ -63,9 +83,11 @@ public class AgentOrchestrator {
             validateUserInput(userInput);
             String systemName = extractSystemName(userInput);
             log.info("解析到有效系统名称 | requestId: {} | 系统名称: {}", requestId, systemName);
+            if (progressListener != null) progressListener.accept("解析到有效系统名称：" + systemName);
 
             // 3. 生成PRD (保持不变)
             log.info("开始生成PRD文档 | requestId: {} | 系统名称: {}", requestId, systemName);
+            if (progressListener != null) progressListener.accept("正在生成 PRD 文档...");
             long prdStart = System.currentTimeMillis();
             RequirementResult prdResult = requirementService.generateRequirementDocument(userInput);
             long prdCost = System.currentTimeMillis() - prdStart;
@@ -73,6 +95,7 @@ public class AgentOrchestrator {
 
             // 4. 生成架构文档 (保持不变)
             log.info("开始生成架构文档 | requestId: {} | 系统名称: {}", requestId, systemName);
+            if (progressListener != null) progressListener.accept("正在生成架构文档...");
             long archStart = System.currentTimeMillis();
             ArchitectResult archResult = architectService.generateArchitectDocument(
                     prdResult.getDocumentContent(), systemName);
@@ -80,36 +103,48 @@ public class AgentOrchestrator {
             log.info("架构文档生成完成 | requestId: {} | 耗时: {}ms | 存储路径: {}", requestId, archCost, archResult.getStoragePath());
 
             // ========== 关键修改区域开始：后端 → 前端 两阶段 ==========
-            // 5. 先生成后端
-            log.info("开始生成后端代码 | requestId: {} | 系统名称: {}", requestId, systemName);
-            long backendStart = System.currentTimeMillis();
-            Map<String, String> backendFiles = codeGenerationService.generateBackendFiles(
-                    systemName,
-                    prdResult.getDocumentContent(),
-                    archResult.getDocumentContent()
-            );
-            long backendCost = System.currentTimeMillis() - backendStart;
-            log.info("后端代码生成完成 | requestId: {} | 耗时: {}ms | 文件数量: {}", requestId, backendCost, backendFiles.size());
-
-            // 6. 再生成前端（依据已生成后端接口）
-            log.info("开始生成前端代码 | requestId: {} | 系统名称: {}", requestId, systemName);
-            long frontendStart = System.currentTimeMillis();
-            Map<String, String> frontendFiles = frontendGenerationService.generateFrontendFiles(
-                    systemName,
-                    prdResult.getDocumentContent(),
-                    archResult.getDocumentContent(),
-                    backendFiles
-            );
-            long frontendCost = System.currentTimeMillis() - frontendStart;
-            log.info("前端代码生成完成 | requestId: {} | 耗时: {}ms | 文件数量: {}", requestId, frontendCost, frontendFiles.size());
-
-            // 合并前后端文件
+            // 5. 后端骨架
+            if (progressListener != null) progressListener.accept("正在生成后端项目骨架...");
             Map<String, String> projectFiles = new java.util.LinkedHashMap<>();
-            projectFiles.putAll(backendFiles);
-            projectFiles.putAll(frontendFiles);
+            Map<String, String> backendSkeleton = backendSkeletonGenerator.generateBackendSkeleton(
+                    systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
+            projectFiles.putAll(backendSkeleton);
+
+            // 6. 后端 Controller
+            if (progressListener != null) progressListener.accept("正在生成后端接口 (Controller)...");
+            Map<String, String> backendControllers = backendControllerGenerator.generateBackendControllers(
+                    systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
+            projectFiles.putAll(backendControllers);
+
+            // 7. 后端 Domain
+            if (progressListener != null) progressListener.accept("正在生成后端领域层 (Service/Entity/DTO)...");
+            Map<String, String> backendDomain = backendDomainGenerator.generateBackendDomainLayer(
+                    systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
+            projectFiles.putAll(backendDomain);
+
+            // 8. 前端骨架
+            if (progressListener != null) progressListener.accept("正在生成前端项目骨架...");
+            Map<String, String> frontendSkeleton = frontendSkeletonGenerator.generateFrontendSkeleton(
+                    systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
+            projectFiles.putAll(frontendSkeleton);
+
+            // 9. 前端 Views
+            if (progressListener != null) progressListener.accept("正在生成前端页面 (Views)...");
+            Map<String, String> frontendViews = frontendViewsGenerator.generateFrontendViews(
+                    systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles);
+            projectFiles.putAll(frontendViews);
+
+            // 10. 前端 API 封装
+            if (progressListener != null) progressListener.accept("正在封装前端 API 接口...");
+            Map<String, String> frontendApi = frontendApiGenerator.generateFrontendApiUtils(
+                    systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles);
+            projectFiles.putAll(frontendApi);
+
             log.info("项目代码合并完成 | requestId: {} | 文件总数: {}", requestId, projectFiles.size());
 
             // 6. 保存整个项目到 D 盘指定目录
+            if (progressListener != null) progressListener.accept("正在落盘保存完整项目文件...");
+            validateProjectIntegrity(projectFiles, systemName);
             String projectRootPath = codeOutputService.saveGeneratedProject(systemName, projectFiles);
             log.info("✅ 完整项目已保存至: {}", projectRootPath);
             // ========== 关键修改区域结束 ==========
@@ -175,6 +210,63 @@ public class AgentOrchestrator {
                     "系统异常，请稍后重试：" + e.getMessage(),
                     totalCost
             );
+        }
+    }
+
+    /**
+     * 最终项目完整性校验
+     */
+    private void validateProjectIntegrity(Map<String, String> projectFiles, String systemName) throws GraphRunnerException {
+        String basePackage = "com." + systemName.toLowerCase().replaceAll("[^a-z0-9]", "");
+        
+        // 1. 前端必需文件
+        if (!projectFiles.containsKey("frontend/src/main.js") && !projectFiles.containsKey("frontend/src/main.ts")) {
+            throw new GraphRunnerException("前端骨架缺少必需文件: src/main.js 或 src/main.ts");
+        }
+        if (!projectFiles.containsKey("frontend/src/App.vue")) {
+            throw new GraphRunnerException("前端骨架缺少必需文件: src/App.vue");
+        }
+        if (!projectFiles.containsKey("frontend/src/router/index.js") && !projectFiles.containsKey("frontend/src/router/index.ts")) {
+            throw new GraphRunnerException("前端骨架缺少必需文件: src/router/index.js 或 index.ts");
+        }
+        if (!projectFiles.containsKey("frontend/src/utils/axios.js") && !projectFiles.containsKey("frontend/src/utils/axios.ts")) {
+            throw new GraphRunnerException("前端骨架缺少必需文件: src/utils/axios.js 或 axios.ts");
+        }
+
+        // 2. 后端必需文件
+        if (!projectFiles.containsKey("backend/pom.xml")) {
+            throw new GraphRunnerException("后端骨架缺少必需文件: pom.xml");
+        }
+        
+        // 3. 业务完整性检查
+        boolean hasAuthService = projectFiles.keySet().stream().anyMatch(p -> p.contains("AuthService.java"));
+        if (!hasAuthService) {
+            throw new GraphRunnerException("后端领域层缺少必需组件: AuthService.java");
+        }
+        
+        boolean hasSecurityConfig = projectFiles.keySet().stream().anyMatch(p -> p.contains("SecurityConfig.java"));
+        if (!hasSecurityConfig) {
+            throw new GraphRunnerException("后端骨架缺少必需配置: SecurityConfig.java");
+        }
+
+        boolean hasCorsConfig = projectFiles.keySet().stream().anyMatch(p -> p.contains("CorsConfig.java"));
+        if (!hasCorsConfig) {
+            throw new GraphRunnerException("后端骨架缺少必需配置: CorsConfig.java (跨域工具)");
+        }
+
+        // 4. 包名校验：检查所有 Java 文件是否包含正确的 package 声明
+        boolean hasWrongPackage = projectFiles.entrySet().stream()
+                .filter(e -> e.getKey().startsWith("backend/src/main/java/") && e.getKey().endsWith(".java"))
+                .anyMatch(e -> !e.getValue().contains("package " + basePackage));
+        
+        if (hasWrongPackage) {
+            log.warn("检测到部分后端文件包名可能不匹配，期望前缀: package {}", basePackage);
+            // 这里可以根据需求决定是直接抛异常还是仅警告
+            // 为了保证项目可运行，建议对于 com.example 这种典型错误进行拦截
+            boolean isExamplePackage = projectFiles.values().stream().anyMatch(v -> v.contains("package com.example"));
+            if (isExamplePackage) {
+                throw new GraphRunnerException("后端文件包名错误：检测到大量 com.example 包名，而非 " + basePackage);
+            }
         }
     }
 

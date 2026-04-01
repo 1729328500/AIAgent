@@ -5,7 +5,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -26,6 +30,7 @@ public class FrontendGenerationService {
     private final CoderAgentConfig coderConfig;
     private final RestTemplate restTemplate = new RestTemplate();
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private static final Pattern FILE_BLOCK_PATTERN = Pattern.compile(
             "\\[FILE_START\\]\\s*(.+?)\\s*\\n(.*?)\\s*\\[FILE_END\\]",
             Pattern.DOTALL | Pattern.MULTILINE
@@ -37,7 +42,6 @@ public class FrontendGenerationService {
                                                      Map<String, String> backendFiles) throws GraphRunnerException {
         String apiSpec = extractApiSpecFromBackend(backendFiles);
         String prompt = buildFrontendPrompt(systemName, prdContent, archContent, apiSpec);
-
         Map<String, String> variables = new HashMap<>();
         variables.put("project.name", systemName);
         variables.put("required.files", """
@@ -47,17 +51,14 @@ public class FrontendGenerationService {
         - frontend/src/App.vue
         - frontend/src/**/*
         """);
-
         String raw = callAnythingLLM(prompt, variables, systemName);
         Map<String, String> files = parseFiles(raw);
-
         if (!files.containsKey("frontend/package.json")
                 || !files.containsKey("frontend/vite.config.js")
                 || !files.containsKey("frontend/src/main.js")
                 || !files.containsKey("frontend/src/App.vue")) {
             throw new GraphRunnerException("前端生成失败：缺少必需的前端文件");
         }
-
         return files.entrySet().stream()
                 .filter(e -> e.getKey().startsWith("frontend/"))
                 .collect(LinkedHashMap::new, (m, e) -> m.put(e.getKey(), e.getValue()), LinkedHashMap::putAll);
@@ -71,10 +72,10 @@ public class FrontendGenerationService {
         );
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("message", userPrompt);
-        requestBody.put("max_tokens", 8192);
+        requestBody.put("max_tokens", 30000);
         requestBody.put("stream", false);
         requestBody.put("mode", "chat");
-        requestBody.put("sessionId", "fe-agent-session-" + System.currentTimeMillis());
+        requestBody.put("sessionId", "frontend-agent-" + System.currentTimeMillis());
         requestBody.put("variables", variables);
 
         HttpHeaders headers = new HttpHeaders();
@@ -146,21 +147,13 @@ public class FrontendGenerationService {
                 String base = "";
                 if (cm.find()) base = cm.group(1);
                 Matcher mg = methodGet.matcher(content);
-                while (mg.find()) {
-                    sb.append("- GET ").append(base).append(mg.group(1)).append("\n");
-                }
+                while (mg.find()) sb.append("- GET ").append(base).append(mg.group(1)).append("\n");
                 Matcher mp = methodPost.matcher(content);
-                while (mp.find()) {
-                    sb.append("- POST ").append(base).append(mp.group(1)).append("\n");
-                }
+                while (mp.find()) sb.append("- POST ").append(base).append(mp.group(1)).append("\n");
                 Matcher mu = methodPut.matcher(content);
-                while (mu.find()) {
-                    sb.append("- PUT ").append(base).append(mu.group(1)).append("\n");
-                }
+                while (mu.find()) sb.append("- PUT ").append(base).append(mu.group(1)).append("\n");
                 Matcher md = methodDelete.matcher(content);
-                while (md.find()) {
-                    sb.append("- DELETE ").append(base).append(md.group(1)).append("\n");
-                }
+                while (md.find()) sb.append("- DELETE ").append(base).append(md.group(1)).append("\n");
             }
         });
         return sb.toString();

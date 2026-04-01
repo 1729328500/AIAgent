@@ -4,11 +4,13 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.scheduling.annotation.EnableAsync;
 import top.whyh.agentai.config.DashScopeProperties;
 
 
 @SpringBootApplication
 @EnableConfigurationProperties(DashScopeProperties.class)
+@EnableAsync // ← 关键！
 public class RequirementAnalysisServiceApplication {
     public static void main(String[] args) {
         SpringApplication.run(RequirementAnalysisServiceApplication.class, args);
