@@ -70,16 +70,11 @@ public class BackendSkeletonGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        if (!files.containsKey("backend/pom.xml")) {
-            throw new GraphRunnerException("后端骨架缺少 backend/pom.xml");
+        
+        if (files.isEmpty()) {
+            throw new GraphRunnerException("后端骨架生成失败：AI 未返回任何有效文件");
         }
-        boolean hasApp = files.keySet().stream().anyMatch(p -> p.startsWith("backend/src/main/java/") && p.endsWith("Application.java"));
-        if (!hasApp) {
-            throw new GraphRunnerException("后端骨架缺少 Application.java");
-        }
-        if (!files.containsKey("backend/src/main/resources/application.yml")) {
-            throw new GraphRunnerException("后端骨架缺少 application.yml");
-        }
+        
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("backend/")) result.put(k, v); });
         return result;

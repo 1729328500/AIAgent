@@ -39,13 +39,11 @@ public class BackendControllerGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        boolean hasController = files.entrySet().stream()
-                .anyMatch(e -> e.getKey().startsWith("backend/src/main/java/") &&
-                        e.getKey().contains("/controller/") &&
-                        e.getValue().contains("@RestController"));
-        if (!hasController) {
-            throw new GraphRunnerException("未检测到任何 @RestController 控制器");
+        
+        if (files.isEmpty()) {
+            throw new GraphRunnerException("后端控制器生成失败：AI 未返回任何有效文件");
         }
+        
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("backend/")) result.put(k, v); });
         return result;

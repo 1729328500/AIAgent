@@ -56,14 +56,13 @@ public class FrontendSkeletonGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        if (!files.containsKey("frontend/package.json")
-                || !files.containsKey("frontend/vite.config.js")
-                || !files.containsKey("frontend/src/main.js")
-                || !files.containsKey("frontend/src/App.vue")
-                || !files.containsKey("frontend/src/router/index.js")
-                || !files.containsKey("frontend/src/utils/axios.js")) {
-            throw new GraphRunnerException("前端骨架缺少必需文件");
+        
+        // 移除硬校验，交由 CodeReview 阶段处理修复
+        if (files.isEmpty()) {
+             // 只有在完全没有生成文件时才抛出异常（LLM 异常）
+            throw new GraphRunnerException("前端骨架生成失败：AI 未返回任何有效文件");
         }
+        
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("frontend/")) result.put(k, v); });
         return result;

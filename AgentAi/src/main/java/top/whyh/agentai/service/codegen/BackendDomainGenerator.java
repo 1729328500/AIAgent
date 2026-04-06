@@ -53,11 +53,11 @@ public class BackendDomainGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        boolean hasAny = files.keySet().stream().anyMatch(p ->
-                p.contains("/service/") || p.contains("/entity/") || p.contains("/dto/") || p.contains("/repository/"));
-        if (!hasAny) {
-            throw new GraphRunnerException("未检测到 service/entity/dto/repository 任何文件");
+        
+        if (files.isEmpty()) {
+            throw new GraphRunnerException("后端领域层生成失败：AI 未返回任何有效文件");
         }
+        
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("backend/")) result.put(k, v); });
         return result;

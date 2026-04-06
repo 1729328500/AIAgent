@@ -43,10 +43,11 @@ public class FrontendApiGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        boolean hasApi = files.keySet().stream().anyMatch(p -> p.startsWith("frontend/src/api/"));
-        if (!hasApi) {
-            throw new GraphRunnerException("未检测到任何前端 API 封装文件");
+        
+        if (files.isEmpty()) {
+            throw new GraphRunnerException("前端 API 封装生成失败：AI 未返回任何有效文件");
         }
+        
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("frontend/")) result.put(k, v); });
         return result;

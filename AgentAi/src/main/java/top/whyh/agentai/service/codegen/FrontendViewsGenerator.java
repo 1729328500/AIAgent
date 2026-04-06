@@ -40,10 +40,11 @@ public class FrontendViewsGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        boolean hasView = files.keySet().stream().anyMatch(p -> p.startsWith("frontend/src/views/") && p.endsWith(".vue"));
-        if (!hasView) {
-            throw new GraphRunnerException("未检测到任何前端视图文件");
+        
+        if (files.isEmpty()) {
+            throw new GraphRunnerException("前端视图生成失败：AI 未返回任何有效文件");
         }
+        
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("frontend/")) result.put(k, v); });
         return result;

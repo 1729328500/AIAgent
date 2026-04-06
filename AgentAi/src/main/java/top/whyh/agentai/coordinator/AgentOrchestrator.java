@@ -14,18 +14,18 @@ import top.whyh.agentai.service.CodeGenerationService;
 import top.whyh.agentai.service.CodeOutputService;
 import top.whyh.agentai.service.FrontendGenerationService;
 import top.whyh.agentai.service.RequirementAnalysisService;
-import top.whyh.agentai.service.codegen.BackendControllerGenerator;
-import top.whyh.agentai.service.codegen.BackendDomainGenerator;
-import top.whyh.agentai.service.codegen.BackendSkeletonGenerator;
-import top.whyh.agentai.service.codegen.FrontendApiGenerator;
-import top.whyh.agentai.service.codegen.FrontendSkeletonGenerator;
-import top.whyh.agentai.service.codegen.FrontendViewsGenerator;
+import top.whyh.agentai.model.dto.CodeReviewReport;
+import top.whyh.agentai.model.dto.ReviewIssue;
+import top.whyh.agentai.service.CodeReviewService;
+import top.whyh.agentai.service.codegen.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * 智能体协调器：串联需求分析智能体和架构师智能体
@@ -44,11 +44,13 @@ public class AgentOrchestrator {
     private static final int MAX_INPUT_LENGTH = 500;
     /** 系统名称非法字符正则 */
     private static final Pattern ILLEGAL_CHAR_PATTERN = Pattern.compile("[\\\\/:*?\"<>|]");
+    /** 最大修复重试次数 */
+    private static final int MAX_FIX_RETRIES = 10;
 
     private final RequirementAnalysisService requirementService;
     private final ArchitectAnalysisService architectService;
     private final CodeGenerationService codeGenerationService;
-    private final CodeOutputService codeOutputService; // ← 新增注入
+    private final CodeOutputService codeOutputService;
     private final FrontendGenerationService frontendGenerationService;
     private final BackendSkeletonGenerator backendSkeletonGenerator;
     private final BackendControllerGenerator backendControllerGenerator;
@@ -56,6 +58,9 @@ public class AgentOrchestrator {
     private final FrontendSkeletonGenerator frontendSkeletonGenerator;
     private final FrontendViewsGenerator frontendViewsGenerator;
     private final FrontendApiGenerator frontendApiGenerator;
+    private final CodeReviewService codeReviewService; // ← 新增
+    private final LlmClient llmClient; // ← 新增，用于直接修复
+    private final FileBlockParser fileBlockParser; // ← 新增
 
 
     /**
@@ -142,6 +147,38 @@ public class AgentOrchestrator {
 
             log.info("项目代码合并完成 | requestId: {} | 文件总数: {}", requestId, projectFiles.size());
 
+            // ========== 11. 代码审查与修复循环 ==========
+            int attempt = 0;
+            while (attempt < MAX_FIX_RETRIES) {
+                if (progressListener != null) progressListener.accept(String.format("正在进行代码审查 (第%d轮)...", attempt + 1));
+                CodeReviewReport report = codeReviewService.reviewCode(systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles);
+                
+                if (!report.needsFix()) {
+                    log.info("代码审查通过 | requestId: {} | 轮次: {}", requestId, attempt + 1);
+                    if (progressListener != null) progressListener.accept("代码审查通过，项目质量达标。");
+                    break;
+                }
+                
+                log.warn("代码审查未通过 | requestId: {} | 轮次: {} | 问题数: {} | 缺失文件数: {}", 
+                        requestId, attempt + 1, report.getIssues().size(), report.getMissingFiles().size());
+                
+                if (progressListener != null) {
+                    String status = String.format("审查发现问题：%d个问题，%d个缺失文件。正在尝试修复...", 
+                            report.getIssues().size(), report.getMissingFiles().size());
+                    progressListener.accept(status);
+                }
+                
+                // 执行修复
+                Map<String, String> fixedFiles = fixProjectFiles(systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles, report, attempt + 1);
+                projectFiles.putAll(fixedFiles);
+                
+                attempt++;
+                if (attempt == MAX_FIX_RETRIES) {
+                    log.warn("已达到最大修复重试次数，将输出当前状态的项目 | requestId: {}", requestId);
+                    if (progressListener != null) progressListener.accept("警告：已达到最大修复次数，部分问题可能仍未解决。");
+                }
+            }
+
             // 6. 保存整个项目到 D 盘指定目录
             if (progressListener != null) progressListener.accept("正在落盘保存完整项目文件...");
             validateProjectIntegrity(projectFiles, systemName);
@@ -211,6 +248,68 @@ public class AgentOrchestrator {
                     totalCost
             );
         }
+    }
+
+    /**
+     * 根据审查报告修复项目文件
+     */
+    private Map<String, String> fixProjectFiles(String systemName, String prdContent, String archContent, 
+                                               Map<String, String> currentFiles, CodeReviewReport report, int attempt) throws GraphRunnerException {
+        String basePackage = "com." + systemName.toLowerCase().replaceAll("[^a-z0-9]", "");
+        
+        StringBuilder fixPrompt = new StringBuilder();
+        fixPrompt.append(String.format("你是一个资深全栈修复工程师。正在修复系统「%s」的代码生成问题 (第 %d 次修复尝试)。\n", systemName, attempt));
+        fixPrompt.append("### 修复上下文:\n");
+        fixPrompt.append("- **项目包名**: ").append(basePackage).append("\n");
+        fixPrompt.append("- **已存在的文件列表**:\n");
+        currentFiles.keySet().forEach(path -> fixPrompt.append("  - ").append(path).append("\n"));
+        
+        // 【关键优化】提取涉及文件的内容，提供给 AI 作为修复参考
+        fixPrompt.append("\n### 涉及文件的当前内容:\n");
+        java.util.Set<String> relatedFiles = new java.util.HashSet<>();
+        report.getIssues().forEach(issue -> {
+            if (StringUtils.isNotBlank(issue.getFilePath())) {
+                relatedFiles.add(issue.getFilePath());
+            }
+        });
+        
+        relatedFiles.forEach(path -> {
+            if (currentFiles.containsKey(path)) {
+                fixPrompt.append("--- 文件: ").append(path).append(" ---\n");
+                fixPrompt.append(currentFiles.get(path)).append("\n");
+            }
+        });
+
+        fixPrompt.append("\n### 审查发现的问题:\n");
+        report.getIssues().forEach(issue -> 
+            fixPrompt.append(String.format("- [%s] %s (涉及文件: %s)\n", issue.getType(), issue.getDescription(), issue.getFilePath()))
+        );
+        
+        if (!report.getMissingFiles().isEmpty()) {
+            fixPrompt.append("\n### 缺失文件列表 (请生成这些文件):\n");
+            report.getMissingFiles().forEach(path -> fixPrompt.append("- ").append(path).append("\n"));
+        }
+
+        fixPrompt.append("\n### 任务要求:\n");
+        fixPrompt.append("1. **精准修复**：优先修复逻辑错误，并补全缺失的文件。\n");
+        fixPrompt.append("2. **禁止破坏**：修复过程中严禁破坏已有的正确逻辑，确保新代码与现有项目包名、API 路径、依赖关系完美契合。\n");
+        fixPrompt.append("3. **参考架构**：如果修复涉及接口调用，请务必参考 PRD 和架构文档，确保前后端参数名、路径完全一致。\n");
+        fixPrompt.append("4. **严格格式**：每个文件必须按以下结构输出，严禁遗漏内容：\n");
+        fixPrompt.append("   [FILE_START] 路径\n");
+        fixPrompt.append("   内容...\n");
+        fixPrompt.append("   [FILE_END]\n");
+        fixPrompt.append("5. **前缀强制**：所有路径必须以 backend/ 或 frontend/ 开头。\n");
+        fixPrompt.append("不要输出任何解释文字或 Markdown 代码块标签。\n");
+
+        Map<String, String> variables = new java.util.LinkedHashMap<>();
+        variables.put("project.name", systemName);
+        variables.put("review.summary", report.getSummary());
+
+        String raw = llmClient.call(systemName, fixPrompt.toString(), variables);
+        Map<String, String> fixedFiles = fileBlockParser.parse(raw);
+        
+        log.info("修复逻辑执行完成 | 轮次: {} | 修复/补充文件数: {}", attempt, fixedFiles.size());
+        return fixedFiles;
     }
 
     /**
