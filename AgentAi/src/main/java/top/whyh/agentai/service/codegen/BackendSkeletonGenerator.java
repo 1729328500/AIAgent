@@ -2,13 +2,17 @@ package top.whyh.agentai.service.codegen;
 
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class BackendSkeletonGenerator {
     private final LlmClient llmClient;
     private final FileBlockParser parser;
@@ -31,12 +35,12 @@ public class BackendSkeletonGenerator {
                 <?xml version="1.0" encoding="UTF-8"?>
                 ...
                 [FILE_END]
-                
+
                 [FILE_START] backend/src/main/java/%s/%sApplication.java
                 package %s;
                 ...
                 [FILE_END]
-                
+
                 [FILE_START] backend/src/main/java/%s/config/SecurityConfig.java
                 package %s.config;
                 ...
@@ -70,11 +74,48 @@ public class BackendSkeletonGenerator {
         """);
         String raw = llmClient.call(systemName, prompt, variables);
         Map<String, String> files = parser.parse(raw);
-        
+
         if (files.isEmpty()) {
             throw new GraphRunnerException("后端骨架生成失败：AI 未返回任何有效文件");
         }
-        
+
+        // 【新增】即时验证必需文件
+        List<String> requiredFiles = List.of(
+            "backend/pom.xml",
+            "backend/src/main/resources/application.yml"
+        );
+
+        List<String> missing = new ArrayList<>();
+        for (String required : requiredFiles) {
+            boolean found = files.keySet().stream().anyMatch(k -> k.equals(required));
+            if (!found) {
+                missing.add(required);
+            }
+        }
+
+        // 【新增】如果缺少必需文件，立即重试一次
+        if (!missing.isEmpty()) {
+            log.warn("后端骨架缺少必需文件: {}, 尝试补充生成...", missing);
+            String supplementPrompt = String.format("""
+                    系统「%s」的后端骨架缺少以下必需文件，请立即生成：
+                    %s
+
+                    项目包名: %s
+
+                    严格按以下格式输出：
+                    [FILE_START] 文件路径
+                    文件内容
+                    [FILE_END]
+
+                    不要输出任何解释文字或 Markdown 标签。
+                    """, systemName, String.join("\n", missing), basePackage);
+
+            String supplementRaw = llmClient.call(systemName, supplementPrompt, variables);
+            Map<String, String> supplementFiles = parser.parse(supplementRaw);
+            files.putAll(supplementFiles);
+            log.info("补充生成完成，新增文件数: {}", supplementFiles.size());
+        }
+
         Map<String, String> result = new LinkedHashMap<>();
         files.forEach((k, v) -> { if (k.startsWith("backend/")) result.put(k, v); });
         return result;

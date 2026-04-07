@@ -152,26 +152,38 @@ public class AgentOrchestrator {
             while (attempt < MAX_FIX_RETRIES) {
                 if (progressListener != null) progressListener.accept(String.format("正在进行代码审查 (第%d轮)...", attempt + 1));
                 CodeReviewReport report = codeReviewService.reviewCode(systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles);
-                
+
                 if (!report.needsFix()) {
                     log.info("代码审查通过 | requestId: {} | 轮次: {}", requestId, attempt + 1);
                     if (progressListener != null) progressListener.accept("代码审查通过，项目质量达标。");
                     break;
                 }
-                
-                log.warn("代码审查未通过 | requestId: {} | 轮次: {} | 问题数: {} | 缺失文件数: {}", 
+
+                log.warn("代码审查未通过 | requestId: {} | 轮次: {} | 问题数: {} | 缺失文件数: {}",
                         requestId, attempt + 1, report.getIssues().size(), report.getMissingFiles().size());
-                
-                if (progressListener != null) {
-                    String status = String.format("审查发现问题：%d个问题，%d个缺失文件。正在尝试修复...", 
-                            report.getIssues().size(), report.getMissingFiles().size());
-                    progressListener.accept(status);
+
+                // 【关键改进】先处理缺失文件，再处理逻辑错误
+                if (!report.getMissingFiles().isEmpty()) {
+                    if (progressListener != null) {
+                        progressListener.accept(String.format("发现 %d 个缺失文件，正在生成...", report.getMissingFiles().size()));
+                    }
+                    Map<String, String> missingFiles = generateMissingFiles(systemName, prdResult.getDocumentContent(),
+                            archResult.getDocumentContent(), projectFiles, report.getMissingFiles(), attempt + 1);
+                    projectFiles.putAll(missingFiles);
+                    log.info("缺失文件生成完成 | 轮次: {} | 新增文件数: {}", attempt + 1, missingFiles.size());
                 }
-                
-                // 执行修复
-                Map<String, String> fixedFiles = fixProjectFiles(systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles, report, attempt + 1);
-                projectFiles.putAll(fixedFiles);
-                
+
+                // 再处理逻辑错误
+                if (!report.getIssues().isEmpty()) {
+                    if (progressListener != null) {
+                        progressListener.accept(String.format("发现 %d 个逻辑问题，正在修复...", report.getIssues().size()));
+                    }
+                    Map<String, String> fixedFiles = fixLogicIssues(systemName, prdResult.getDocumentContent(),
+                            archResult.getDocumentContent(), projectFiles, report.getIssues(), attempt + 1);
+                    projectFiles.putAll(fixedFiles);
+                    log.info("逻辑问题修复完成 | 轮次: {} | 修复文件数: {}", attempt + 1, fixedFiles.size());
+                }
+
                 attempt++;
                 if (attempt == MAX_FIX_RETRIES) {
                     log.warn("已达到最大修复重试次数，将输出当前状态的项目 | requestId: {}", requestId);
@@ -251,64 +263,143 @@ public class AgentOrchestrator {
     }
 
     /**
-     * 根据审查报告修复项目文件
+     * 专门处理缺失文件的生成
      */
-    private Map<String, String> fixProjectFiles(String systemName, String prdContent, String archContent, 
-                                               Map<String, String> currentFiles, CodeReviewReport report, int attempt) throws GraphRunnerException {
+    private Map<String, String> generateMissingFiles(String systemName, String prdContent, String archContent,
+                                                     Map<String, String> currentFiles, List<String> missingFiles,
+                                                     int attempt) throws GraphRunnerException {
         String basePackage = "com." + systemName.toLowerCase().replaceAll("[^a-z0-9]", "");
-        
-        StringBuilder fixPrompt = new StringBuilder();
-        fixPrompt.append(String.format("你是一个资深全栈修复工程师。正在修复系统「%s」的代码生成问题 (第 %d 次修复尝试)。\n", systemName, attempt));
-        fixPrompt.append("### 修复上下文:\n");
-        fixPrompt.append("- **项目包名**: ").append(basePackage).append("\n");
-        fixPrompt.append("- **已存在的文件列表**:\n");
-        currentFiles.keySet().forEach(path -> fixPrompt.append("  - ").append(path).append("\n"));
-        
-        // 【关键优化】提取涉及文件的内容，提供给 AI 作为修复参考
-        fixPrompt.append("\n### 涉及文件的当前内容:\n");
-        java.util.Set<String> relatedFiles = new java.util.HashSet<>();
-        report.getIssues().forEach(issue -> {
-            if (StringUtils.isNotBlank(issue.getFilePath())) {
-                relatedFiles.add(issue.getFilePath());
-            }
-        });
-        
-        relatedFiles.forEach(path -> {
-            if (currentFiles.containsKey(path)) {
-                fixPrompt.append("--- 文件: ").append(path).append(" ---\n");
-                fixPrompt.append(currentFiles.get(path)).append("\n");
-            }
-        });
 
-        fixPrompt.append("\n### 审查发现的问题:\n");
-        report.getIssues().forEach(issue -> 
-            fixPrompt.append(String.format("- [%s] %s (涉及文件: %s)\n", issue.getType(), issue.getDescription(), issue.getFilePath()))
-        );
-        
-        if (!report.getMissingFiles().isEmpty()) {
-            fixPrompt.append("\n### 缺失文件列表 (请生成这些文件):\n");
-            report.getMissingFiles().forEach(path -> fixPrompt.append("- ").append(path).append("\n"));
+        StringBuilder prompt = new StringBuilder();
+        prompt.append(String.format("你是一个资深全栈工程师。系统「%s」缺少以下文件，请生成它们 (第 %d 次尝试)。\n\n", systemName, attempt));
+
+        prompt.append("### 项目信息:\n");
+        prompt.append("- **项目包名**: ").append(basePackage).append("\n");
+        prompt.append("- **已存在的文件数**: ").append(currentFiles.size()).append("\n\n");
+
+        prompt.append("### 需要生成的缺失文件:\n");
+        missingFiles.forEach(path -> prompt.append("- ").append(path).append("\n"));
+
+        // 【关键】提供相关文件的完整内容作为参考
+        prompt.append("\n### 相关文件内容（用于理解项目结构和依赖关系）:\n");
+
+        // 智能提取相关文件：根据缺失文件路径找到可能的依赖
+        java.util.Set<String> relatedFiles = new java.util.HashSet<>();
+        for (String missingPath : missingFiles) {
+            // 如果缺失的是 Service，提供对应的 Controller 和 Entity
+            if (missingPath.contains("Service.java")) {
+                String entityName = missingPath.replaceAll(".*/([A-Z]\\w+)Service\\.java", "$1");
+                currentFiles.keySet().stream()
+                    .filter(p -> p.contains(entityName + "Controller") || p.contains(entityName + ".java") || p.contains(entityName + "DTO"))
+                    .forEach(relatedFiles::add);
+            }
+            // 如果缺失的是前端 API，提供对应的后端 Controller
+            else if (missingPath.contains("api/") && missingPath.endsWith(".js")) {
+                String apiName = missingPath.replaceAll(".*/([a-z]+)\\.js", "$1");
+                currentFiles.keySet().stream()
+                    .filter(p -> p.toLowerCase().contains(apiName.toLowerCase()) && p.contains("Controller"))
+                    .forEach(relatedFiles::add);
+            }
+            // 如果缺失的是前端 View，提供路由和 API 文件
+            else if (missingPath.contains("views/") && missingPath.endsWith(".vue")) {
+                currentFiles.keySet().stream()
+                    .filter(p -> p.contains("router/index") || p.contains("api/"))
+                    .forEach(relatedFiles::add);
+            }
         }
 
-        fixPrompt.append("\n### 任务要求:\n");
-        fixPrompt.append("1. **精准修复**：优先修复逻辑错误，并补全缺失的文件。\n");
-        fixPrompt.append("2. **禁止破坏**：修复过程中严禁破坏已有的正确逻辑，确保新代码与现有项目包名、API 路径、依赖关系完美契合。\n");
-        fixPrompt.append("3. **参考架构**：如果修复涉及接口调用，请务必参考 PRD 和架构文档，确保前后端参数名、路径完全一致。\n");
-        fixPrompt.append("4. **严格格式**：每个文件必须按以下结构输出，严禁遗漏内容：\n");
-        fixPrompt.append("   [FILE_START] 路径\n");
-        fixPrompt.append("   内容...\n");
-        fixPrompt.append("   [FILE_END]\n");
-        fixPrompt.append("5. **前缀强制**：所有路径必须以 backend/ 或 frontend/ 开头。\n");
-        fixPrompt.append("不要输出任何解释文字或 Markdown 代码块标签。\n");
+        // 输出相关文件的完整内容
+        relatedFiles.forEach(path -> {
+            if (currentFiles.containsKey(path)) {
+                prompt.append("\n--- 文件: ").append(path).append(" ---\n");
+                prompt.append(currentFiles.get(path)).append("\n");
+            }
+        });
+
+        prompt.append("\n### PRD 文档（节选）:\n");
+        prompt.append(prdContent.substring(0, Math.min(prdContent.length(), 2000))).append("\n\n");
+
+        prompt.append("### 架构文档（节选）:\n");
+        prompt.append(archContent.substring(0, Math.min(archContent.length(), 2000))).append("\n\n");
+
+        prompt.append("### 生成要求:\n");
+        prompt.append("1. **严格按照已有文件的风格和包名生成**，确保包名为 ").append(basePackage).append("\n");
+        prompt.append("2. **前后端接口必须对齐**：API 路径、参数名、返回格式要与已有 Controller 一致\n");
+        prompt.append("3. **依赖关系完整**：Service 要注入 Repository，Controller 要注入 Service\n");
+        prompt.append("4. **输出格式**：每个文件必须严格按以下格式输出，不要有任何额外文字：\n");
+        prompt.append("   [FILE_START] 完整路径（必须以 backend/ 或 frontend/ 开头）\n");
+        prompt.append("   完整的文件内容...\n");
+        prompt.append("   [FILE_END]\n");
+        prompt.append("5. **禁止输出**：不要输出任何解释、注释、Markdown 代码块标签\n");
 
         Map<String, String> variables = new java.util.LinkedHashMap<>();
         variables.put("project.name", systemName);
-        variables.put("review.summary", report.getSummary());
+        variables.put("missing.count", String.valueOf(missingFiles.size()));
 
-        String raw = llmClient.call(systemName, fixPrompt.toString(), variables);
+        String raw = llmClient.call(systemName, prompt.toString(), variables);
+        Map<String, String> generatedFiles = fileBlockParser.parse(raw);
+
+        log.info("缺失文件生成完成 | 轮次: {} | 请求生成: {} | 实际生成: {}",
+                attempt, missingFiles.size(), generatedFiles.size());
+
+        return generatedFiles;
+    }
+
+    /**
+     * 专门处理逻辑错误的修复
+     */
+    private Map<String, String> fixLogicIssues(String systemName, String prdContent, String archContent,
+                                              Map<String, String> currentFiles, List<ReviewIssue> issues,
+                                              int attempt) throws GraphRunnerException {
+        String basePackage = "com." + systemName.toLowerCase().replaceAll("[^a-z0-9]", "");
+
+        StringBuilder prompt = new StringBuilder();
+        prompt.append(String.format("你是一个代码修复专家。系统「%s」存在以下逻辑问题，请修复 (第 %d 次尝试)。\n\n", systemName, attempt));
+
+        prompt.append("### 项目包名: ").append(basePackage).append("\n\n");
+
+        prompt.append("### 发现的问题:\n");
+        issues.forEach(issue -> {
+            prompt.append(String.format("- **[%s]** %s\n", issue.getType(), issue.getDescription()));
+            prompt.append(String.format("  涉及文件: %s\n\n", issue.getFilePath()));
+        });
+
+        // 提取所有涉及文件的完整内容
+        prompt.append("### 涉及文件的完整内容:\n");
+        java.util.Set<String> involvedFiles = new java.util.HashSet<>();
+        issues.forEach(issue -> {
+            if (StringUtils.isNotBlank(issue.getFilePath())) {
+                involvedFiles.add(issue.getFilePath());
+            }
+        });
+
+        involvedFiles.forEach(path -> {
+            if (currentFiles.containsKey(path)) {
+                prompt.append("\n--- 文件: ").append(path).append(" ---\n");
+                prompt.append(currentFiles.get(path)).append("\n");
+            }
+        });
+
+        prompt.append("\n### 修复要求:\n");
+        prompt.append("1. **只修复有问题的文件**，不要修改其他正常文件\n");
+        prompt.append("2. **保持包名和路径不变**，确保包名为 ").append(basePackage).append("\n");
+        prompt.append("3. **修复后的代码必须完整**，不要省略任何部分\n");
+        prompt.append("4. **输出格式**：\n");
+        prompt.append("   [FILE_START] 文件路径\n");
+        prompt.append("   修复后的完整文件内容\n");
+        prompt.append("   [FILE_END]\n");
+        prompt.append("5. **禁止输出任何解释文字或 Markdown 标签**\n");
+
+        Map<String, String> variables = new java.util.LinkedHashMap<>();
+        variables.put("project.name", systemName);
+        variables.put("issue.count", String.valueOf(issues.size()));
+
+        String raw = llmClient.call(systemName, prompt.toString(), variables);
         Map<String, String> fixedFiles = fileBlockParser.parse(raw);
-        
-        log.info("修复逻辑执行完成 | 轮次: {} | 修复/补充文件数: {}", attempt, fixedFiles.size());
+
+        log.info("逻辑问题修复完成 | 轮次: {} | 问题数: {} | 修复文件数: {}",
+                attempt, issues.size(), fixedFiles.size());
+
         return fixedFiles;
     }
 

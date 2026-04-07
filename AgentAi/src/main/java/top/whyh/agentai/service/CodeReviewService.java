@@ -126,27 +126,37 @@ public class CodeReviewService {
         prompt.append("### 架构文档:\n").append(archContent).append("\n\n");
         prompt.append("### 已生成的文件列表 (共 ").append(projectFiles.size()).append(" 个):\n");
         projectFiles.keySet().forEach(path -> prompt.append("- ").append(path).append("\n"));
-        
+
         prompt.append("\n### 核心代码内容 (请重点审查接口定义和调用):\n");
-        // 增加核心文件的采样量
+        // 【改进】增加采样量，并提供完整内容
         projectFiles.entrySet().stream()
-                .filter(e -> e.getKey().contains("Controller") 
-                        || e.getKey().contains("Service.java") 
-                        || e.getKey().contains("api/") 
-                        || e.getKey().contains("router/") 
+                .filter(e -> e.getKey().contains("Controller")
+                        || e.getKey().contains("Service.java")
+                        || e.getKey().contains("api/")
+                        || e.getKey().contains("router/")
                         || e.getKey().contains("App.vue")
                         || e.getKey().contains("SecurityConfig.java")
-                        || e.getKey().contains("axios.js"))
-                .limit(20) // 增加到 20 个核心文件
+                        || e.getKey().contains("CorsConfig.java")
+                        || e.getKey().contains("axios.js")
+                        || e.getKey().contains("Application.java")
+                        || e.getKey().contains("pom.xml")
+                        || e.getKey().contains("package.json"))
+                .limit(30) // 增加到 30 个核心文件
                 .forEach(e -> {
                     String content = e.getValue();
-                    // 增加采样长度到 1000 字符
-                    String summary = content.substring(0, Math.min(content.length(), 1000));
+                    // 【改进】提供完整内容，不截断
                     prompt.append("--- 文件: ").append(e.getKey()).append(" ---\n")
-                            .append(summary).append("\n\n");
+                            .append(content).append("\n\n");
                 });
 
+        prompt.append("\n### 审查重点:\n");
+        prompt.append("1. 检查是否所有 PRD 中提到的功能模块都有对应的 Controller、Service、Entity\n");
+        prompt.append("2. 检查前端 API 调用路径是否与后端 @RequestMapping 完全一致\n");
+        prompt.append("3. 检查所有 import 语句引用的类是否都存在于文件列表中\n");
+        prompt.append("4. 检查包名是否统一且符合规范\n");
+        prompt.append("5. 检查是否缺少关键配置文件（如 SecurityConfig、CorsConfig）\n");
         prompt.append("\n请基于以上完整上下文，进行深度审查。如果发现修复后的代码引入了新问题，请务必指出。");
+
         return prompt.toString();
     }
 
