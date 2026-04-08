@@ -1,24 +1,28 @@
 package top.whyh.agentai.result;
 
+import java.util.Map;
+
 /**
- * 全流程生成结果封装类（增强字段、完善toString）
+ * 全流程生成结果封装类
  */
 public class SystemGenerateResult {
-    private final String requestId;        // 请求ID（链路追踪）
-    private final String systemName;       // 系统名称
-    private final String prdDocumentId;    // PRD文档ID
-    private final String prdStoragePath;   // PRD存储路径
-    private final String archDocumentId;   // 架构文档ID
-    private final String archStoragePath;  // 架构文档存储路径
+    private final String requestId;
+    private final String systemName;
+    private final String prdDocumentId;
+    private final String prdStoragePath;
+    private final String archDocumentId;
+    private final String archStoragePath;
 
-    // 👇 新增字段：代码存储路径
-    private final String codeStoragePath;  // 生成的代码在本地的绝对路径
+    /** 生成的项目文件 Map（相对路径 -> 文件内容），用于前端预览，用户确认后再落盘 */
+    private final Map<String, String> projectFiles;
 
-    private final String status;           // 执行状态（success/fail）
-    private final String errorMsg;         // 错误信息
-    private final long totalCostMs;        // 总耗时（毫秒）
+    /** 用户确认保存后，后端返回的本地绝对路径（预览阶段为 null） */
+    private String savedProjectPath;
 
-    // 👇 更新构造函数：增加 codeStoragePath 参数（第7个位置）
+    private final String status;
+    private final String errorMsg;
+    private final long totalCostMs;
+
     public SystemGenerateResult(
             String requestId,
             String systemName,
@@ -26,7 +30,7 @@ public class SystemGenerateResult {
             String prdStoragePath,
             String archDocumentId,
             String archStoragePath,
-            String codeStoragePath,   // ← 新增
+            Map<String, String> projectFiles,
             String status,
             String errorMsg,
             long totalCostMs
@@ -37,40 +41,32 @@ public class SystemGenerateResult {
         this.prdStoragePath = prdStoragePath;
         this.archDocumentId = archDocumentId;
         this.archStoragePath = archStoragePath;
-        this.codeStoragePath = codeStoragePath; // ← 赋值
+        this.projectFiles = projectFiles;
         this.status = status;
         this.errorMsg = errorMsg;
         this.totalCostMs = totalCostMs;
     }
 
-    // Getters
     public String getRequestId() { return requestId; }
     public String getSystemName() { return systemName; }
     public String getPrdDocumentId() { return prdDocumentId; }
     public String getPrdStoragePath() { return prdStoragePath; }
     public String getArchDocumentId() { return archDocumentId; }
     public String getArchStoragePath() { return archStoragePath; }
-
-    // 👇 新增 getter
-    public String getCodeStoragePath() { return codeStoragePath; }
-
+    public Map<String, String> getProjectFiles() { return projectFiles; }
+    public String getSavedProjectPath() { return savedProjectPath; }
+    public void setSavedProjectPath(String savedProjectPath) { this.savedProjectPath = savedProjectPath; }
     public String getStatus() { return status; }
     public String getErrorMsg() { return errorMsg; }
     public long getTotalCostMs() { return totalCostMs; }
 
-    // 重写 toString（包含 codeStoragePath）
     @Override
     public String toString() {
         return "SystemGenerateResult{" +
                 "requestId='" + requestId + '\'' +
                 ", systemName='" + systemName + '\'' +
-                ", prdDocumentId='" + prdDocumentId + '\'' +
-                ", prdStoragePath='" + prdStoragePath + '\'' +
-                ", archDocumentId='" + archDocumentId + '\'' +
-                ", archStoragePath='" + archStoragePath + '\'' +
-                ", codeStoragePath='" + codeStoragePath + '\'' + // ← 新增
                 ", status='" + status + '\'' +
-                ", errorMsg='" + errorMsg + '\'' +
+                ", fileCount=" + (projectFiles != null ? projectFiles.size() : 0) +
                 ", totalCostMs=" + totalCostMs +
                 '}';
     }

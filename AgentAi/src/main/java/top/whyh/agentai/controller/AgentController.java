@@ -30,6 +30,21 @@ public class AgentController {
         return ResponseEntity.ok(task);
     }
 
+    /**
+     * 用户在前端预览产物后，确认保存到本地
+     */
+    @PostMapping("/task/{taskId}/save")
+    public ResponseEntity<?> saveProject(@PathVariable String taskId) {
+        try {
+            String savedPath = taskService.saveTaskProject(taskId);
+            return ResponseEntity.ok(new SaveResponse(savedPath, "项目已成功保存到本地"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(new ErrorResponse(e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(new ErrorResponse("保存失败: " + e.getMessage()));
+        }
+    }
+
     @Data
     public static class GenerateRequest {
         private String userInput;
@@ -39,5 +54,16 @@ public class AgentController {
     public static class TaskSubmitResponse {
         private final String taskId;
         private final String message;
+    }
+
+    @Data
+    public static class SaveResponse {
+        private final String savedPath;
+        private final String message;
+    }
+
+    @Data
+    public static class ErrorResponse {
+        private final String error;
     }
 }

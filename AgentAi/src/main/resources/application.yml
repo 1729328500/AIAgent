@@ -73,5 +73,18 @@ agent:
       min-api-count: 5
       min-db-table-count: 3
 
+jwt:
+  secret: "AgentAiSecretKey2026AgentAiSecretKey2026AgentAiSecretKey2026!!"
+  expiration: 86400000  # 24小时
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
 server:
   port: 8080

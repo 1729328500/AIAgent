@@ -11,9 +11,9 @@ public class RedisKeys {
     }
 
     /**
-     * 用户 Token Key
+     * 用户 Token Key（支持 String 类型的 userId）
      */
-    public static String getUserTokenKey(Long userId) {
+    public static String getUserTokenKey(String userId) {
         return "user:token:" + userId;
     }
 }

@@ -53,16 +53,16 @@ public class SystemGenerateController {
     public ResponseEntity<SystemGenerateResult> handleException(Exception e) {
         // 严格匹配构造函数参数：String(String,String,String,String,String,String,String,String,long)
         SystemGenerateResult errorResult = new SystemGenerateResult(
-                "",          // 1. requestId：请求ID（异常场景无请求ID则填空）
-                "agentai",   // 2. systemName：系统名称（填实际系统名，如agentai）
-                "",          // 3. prdDocumentId：PRD文档ID（异常场景无则填空）
-                "",          // 4. prdStoragePath：PRD存储路径（异常场景无则填空）
-                "",          // 5. archDocumentId：架构文档ID（异常场景无则填空）
-                "",          // 6. archStoragePath：架构存储路径（异常场景无则填空）
-                "fail",      // 7. status：执行状态（固定fail）
-                e.getMessage(), // 8. errorMsg：错误信息（异常详情）
-                "",
-                0L          // 9. totalCostMs：总耗时（long类型，异常场景耗时为0）
+                "",          // requestId
+                "agentai",   // systemName
+                "",          // prdDocumentId
+                "",          // prdStoragePath
+                "",          // archDocumentId
+                "",          // archStoragePath
+                null,        // projectFiles
+                "fail",      // status
+                e.getMessage(), // errorMsg
+                0L           // totalCostMs
         );
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResult);
     }

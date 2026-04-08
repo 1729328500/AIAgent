@@ -18,6 +18,7 @@ public class TaskService {
 
     private final RedisCache redisCache;
     private final AgentOrchestrator agentOrchestrator;
+    private final CodeOutputService codeOutputService;
 
     private static final String TASK_KEY_PREFIX = "agent:task:";
     private static final long TASK_TTL_HOURS = 24;
@@ -29,12 +30,11 @@ public class TaskService {
         task.setStatus("pending");
         task.setMessage("任务已提交，等待处理");
         saveTask(taskId, task);
-        // 异步启动执行
         executeTaskAsync(taskId, userInput);
         return taskId;
     }
 
-    @Async // 必须启用 @EnableAsync
+    @Async
     public void executeTaskAsync(String taskId, String userInput) {
         try {
             SystemGenerateResult result = agentOrchestrator.executeFullFlow(
@@ -45,12 +45,36 @@ public class TaskService {
             if (task != null) {
                 task.setStatus("success");
                 task.setResult(result);
-                task.setMessage("项目生成成功");
+                task.setMessage("项目生成完成，请在预览页面确认后保存");
                 saveTask(taskId, task);
             }
         } catch (Exception e) {
             updateTaskStatus(taskId, "failed", "执行失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 用户确认后，将 Redis 中的 projectFiles 落盘保存
+     */
+    public String saveTaskProject(String taskId) {
+        GenerationTask task = getTask(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("任务不存在或已过期");
+        }
+        if (!"success".equals(task.getStatus())) {
+            throw new IllegalArgumentException("任务尚未完成，无法保存");
+        }
+        SystemGenerateResult result = task.getResult();
+        if (result == null || result.getProjectFiles() == null || result.getProjectFiles().isEmpty()) {
+            throw new IllegalArgumentException("任务没有可保存的项目文件");
+        }
+        if (result.getSavedProjectPath() != null) {
+            return result.getSavedProjectPath();
+        }
+        String savedPath = codeOutputService.saveGeneratedProject(result.getSystemName(), result.getProjectFiles());
+        result.setSavedProjectPath(savedPath);
+        saveTask(taskId, task);
+        return savedPath;
     }
 
     public GenerationTask getTask(String taskId) {
