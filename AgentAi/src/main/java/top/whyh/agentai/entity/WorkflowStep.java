@@ -20,6 +20,9 @@ public class WorkflowStep {
 
     private String stepDescription;
 
+    /** 步骤输出内容（文档类存全文；代码类存文件数量摘要；超 20000 字符时截断） */
+    private String outputData;
+
     private String agentId;
 
     private String status;

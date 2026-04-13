@@ -16,6 +16,15 @@ public class WorkflowInstance {
 
     private String requirementId;
 
+    /** 关联 Redis 任务 ID，用于从工作流详情跳转预览 */
+    private String taskId;
+
+    /** 系统显示名称（如"博客系统"） */
+    private String workflowName;
+
+    /** 当前正在执行的步骤名 */
+    private String currentStep;
+
     private String workflowType;
 
     private String status;

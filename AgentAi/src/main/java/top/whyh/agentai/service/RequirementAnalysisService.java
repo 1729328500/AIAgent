@@ -100,12 +100,11 @@ public class RequirementAnalysisService {
             throw new GraphRunnerException("需求文档格式校验失败：" + String.join("；", validateErrors));
         }
 
-        // 5. 保存文档到文件
-        String storagePath = saveDocumentToFile(userRequirement, documentId, documentContent);
-        log.info("需求分析文档生成完成，存储路径：{}", storagePath);
+        // 5. 暂不落盘（由用户在预览页确认后统一保存）
+        log.info("需求分析文档生成完成（documentId：{}），待用户确认后保存", documentId);
 
-        // 6. 返回结果
-        return new RequirementResult(documentId, documentContent, storagePath, "success", "");
+        // 6. 返回结果（storagePath 暂为空，落盘后再填充）
+        return new RequirementResult(documentId, documentContent, "", "success", "");
     }
 
     /**
@@ -243,6 +242,17 @@ public class RequirementAnalysisService {
         } catch (Exception e) {
             throw new RuntimeException("文档存储失败：" + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 用户确认保存后，将 PRD 文档内容落盘。
+     * @param systemName 系统名称（用作文件名前缀）
+     * @param documentId  文档 ID（时间戳）
+     * @param content     文档内容
+     * @return 文件绝对路径
+     */
+    public String saveDocument(String systemName, String documentId, String content) {
+        return saveDocumentToFile(systemName, documentId, content);
     }
 
     /**

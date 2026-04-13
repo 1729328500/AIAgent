@@ -69,6 +69,13 @@ export const taskApi = {
   },
   saveProject(taskId) {
     return request.post(`/api/agent/task/${taskId}/save`)
+  },
+  cancel(taskId) {
+    return request.post(`/api/agent/task/${taskId}/cancel`)
+  },
+  deployToSandbox(taskId) {
+    // 部署到 E2B 沙箱（npm install + vite dev，耗时约 1-3 分钟）
+    return request.post(`/api/agent/task/${taskId}/deploy`, {}, { timeout: 120000 })
   }
 }
 

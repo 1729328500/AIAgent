@@ -51,18 +51,20 @@ public class SystemGenerateController {
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<SystemGenerateResult> handleException(Exception e) {
-        // 严格匹配构造函数参数：String(String,String,String,String,String,String,String,String,long)
         SystemGenerateResult errorResult = new SystemGenerateResult(
-                "",          // requestId
-                "agentai",   // systemName
-                "",          // prdDocumentId
-                "",          // prdStoragePath
-                "",          // archDocumentId
-                "",          // archStoragePath
-                null,        // projectFiles
-                "fail",      // status
+                "",             // requestId
+                "",             // systemName
+                "",             // prdDocumentId
+                "",             // prdStoragePath
+                "",             // archDocumentId
+                "",             // archStoragePath
+                null,           // prdContent
+                null,           // archContent
+                null,           // projectFiles
+                null,           // workflowId
+                "fail",         // status
                 e.getMessage(), // errorMsg
-                0L           // totalCostMs
+                0L              // totalCostMs
         );
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResult);
     }

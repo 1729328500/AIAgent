@@ -88,3 +88,7 @@ mybatis-plus:
 
 server:
   port: 8080
+
+# E2B 沙箱配置（成本控制：默认 30 分钟超时，仅部署前端）
+e2b:
+  api-key: "e2b_644445ac0c712ecb58236175a7245fe96f325c67"

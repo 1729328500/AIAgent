@@ -39,6 +39,7 @@ public class ArchitectAnalysisService {
     private static final Pattern API_TABLE_PATTERN = Pattern.compile("\\|\\s*接口路径\\s*\\|\\s*请求方法\\s*\\|\\s*请求参数\\s*\\|\\s*响应参数\\s*\\|\\s*接口描述\\s*\\|");
     private static final Pattern ARCH_MERMAID_PATTERN = Pattern.compile("```mermaid[\\s\\S]*?flowchart|architecture|classDiagram[\\s\\S]*?```");
     private static final Pattern FIRST_LEVEL_TITLE_PATTERN = Pattern.compile("^#\\s+.+系统架构文档", Pattern.MULTILINE);
+    private static final Pattern DDL_PATTERN = Pattern.compile("```sql[\\s\\S]*?CREATE\\s+TABLE[\\s\\S]*?```", Pattern.CASE_INSENSITIVE);
 
     // 构造器注入所有依赖（关键修复！）
     public ArchitectAnalysisService(AgentConfigProperties agentConfig, AgentOutputConfig outputConfig, DashScopeProperties dashScopeProperties) {
@@ -102,11 +103,11 @@ public class ArchitectAnalysisService {
             throw new GraphRunnerException("架构文档格式校验失败：" + String.join("；", validateErrors));
         }
 
-        // 5. 保存文档
-        String filePath = saveDocumentToFile(systemName, documentId, documentContent);
+        // 5. 暂不落盘（由用户在预览页确认后统一保存）
+        log.info("架构文档生成完成（documentId：{}），待用户确认后保存", documentId);
 
-        // 6. 返回结果
-        return new ArchitectResult(documentId, documentContent, filePath, "success", "");
+        // 6. 返回结果（filePath 暂为空）
+        return new ArchitectResult(documentId, documentContent, "", "success", "");
     }
 
     /**
@@ -180,7 +181,12 @@ public class ArchitectAnalysisService {
         5. 一级标题为# {系统名称} 系统架构文档，无其他一级标题；
         6. 所有章节内容非空，使用无序列表/段落组织，禁止空行过多；
         7. 严格基于PRD文档内容生成，不偏离需求；
-        8. 接口定义需符合RESTful规范，参数格式清晰（JSON示例）。
+        8. 接口定义需符合RESTful规范，参数格式清晰（JSON示例）；
+        9. **数据库设计章节必须包含完整的SQL建表语句（DDL）**，要求：
+           - 每张核心业务表均需提供 CREATE TABLE 语句（含注释）
+           - 字段包含主键（AUTO_INCREMENT）、业务字段、created_at、updated_at
+           - 必须使用 MySQL 语法，InnoDB 引擎，utf8mb4 字符集
+           - DDL 放在 ```sql ... ``` 代码块中，紧随表结构说明之后
         """;
     }
 
@@ -206,11 +212,11 @@ public class ArchitectAnalysisService {
         if (StringUtils.isBlank(content)) return "";
         return content
                 .replaceAll("\\{[^}]*\\}", "")
-                .replaceAll("\\[[^\\]]*\\]", "")
                 .replaceAll("\\\\[\"'\\\\/bfnrt]", "")
                 .replaceAll("\\n{4,}", "\n\n")
                 .replaceAll("(?i)抱歉|无法生成|格式错误|不符合要求|error|warning", "")
-                .replaceAll("```(?!mermaid)[\\s\\S]*?```", "")
+                // 只移除非 mermaid 且非 sql 的代码块（要求紧跟语言标识符，避免匹配代码块的闭合 ``` ）
+                .replaceAll("```(?!mermaid)(?!sql)[a-zA-Z][^\\n]*\\n[\\s\\S]*?```", "")
                 .trim();
     }
 
@@ -273,7 +279,19 @@ public class ArchitectAnalysisService {
             errors.add("未包含有效的mermaid架构图（需包含flowchart/architecture/classDiagram）");
         }
 
+        // 6. DDL建表语句校验
+        if (!DDL_PATTERN.matcher(content).find()) {
+            errors.add("数据库设计章节缺少SQL DDL建表语句（需在```sql代码块中包含CREATE TABLE语句）");
+        }
+
         return errors;
+    }
+
+    /**
+     * 用户确认保存后，将架构文档内容落盘。
+     */
+    public String saveDocument(String systemName, String documentId, String content) {
+        return saveDocumentToFile(systemName, documentId, content);
     }
 
     /**

@@ -2,10 +2,8 @@
 package top.whyh.agentai.service;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import top.whyh.agentai.cache.RedisCache;
-import top.whyh.agentai.coordinator.AgentOrchestrator;
 import top.whyh.agentai.model.GenerationTask;
 import top.whyh.agentai.result.SystemGenerateResult;
 
@@ -17,8 +15,10 @@ import java.util.concurrent.TimeUnit;
 public class TaskService {
 
     private final RedisCache redisCache;
-    private final AgentOrchestrator agentOrchestrator;
+    private final AsyncTaskRunner asyncTaskRunner;
     private final CodeOutputService codeOutputService;
+    private final RequirementAnalysisService requirementAnalysisService;
+    private final ArchitectAnalysisService architectAnalysisService;
 
     private static final String TASK_KEY_PREFIX = "agent:task:";
     private static final long TASK_TTL_HOURS = 24;
@@ -30,31 +30,13 @@ public class TaskService {
         task.setStatus("pending");
         task.setMessage("任务已提交，等待处理");
         saveTask(taskId, task);
-        executeTaskAsync(taskId, userInput);
+        // 调用独立 Bean 的 @Async 方法，避免 Spring 自调用导致 @Async 失效
+        asyncTaskRunner.run(taskId, userInput);
         return taskId;
     }
 
-    @Async
-    public void executeTaskAsync(String taskId, String userInput) {
-        try {
-            SystemGenerateResult result = agentOrchestrator.executeFullFlow(
-                    userInput,
-                    progress -> updateTaskStatus(taskId, "running", progress)
-            );
-            GenerationTask task = getTask(taskId);
-            if (task != null) {
-                task.setStatus("success");
-                task.setResult(result);
-                task.setMessage("项目生成完成，请在预览页面确认后保存");
-                saveTask(taskId, task);
-            }
-        } catch (Exception e) {
-            updateTaskStatus(taskId, "failed", "执行失败: " + e.getMessage());
-        }
-    }
-
     /**
-     * 用户确认后，将 Redis 中的 projectFiles 落盘保存
+     * 用户确认后，将 Redis 中的产物全部落盘保存（代码 + PRD 文档 + 架构文档）
      */
     public String saveTaskProject(String taskId) {
         GenerationTask task = getTask(taskId);
@@ -68,13 +50,50 @@ public class TaskService {
         if (result == null || result.getProjectFiles() == null || result.getProjectFiles().isEmpty()) {
             throw new IllegalArgumentException("任务没有可保存的项目文件");
         }
-        if (result.getSavedProjectPath() != null) {
-            return result.getSavedProjectPath();
+
+        // ── 保存代码 ──
+        if (result.getSavedProjectPath() == null) {
+            String savedPath = codeOutputService.saveGeneratedProject(result.getSystemName(), result.getProjectFiles());
+            result.setSavedProjectPath(savedPath);
         }
-        String savedPath = codeOutputService.saveGeneratedProject(result.getSystemName(), result.getProjectFiles());
-        result.setSavedProjectPath(savedPath);
+
+        // ── 保存 PRD 文档 ──
+        if (result.getPrdContent() != null && result.getSavedPrdPath() == null) {
+            try {
+                String prdPath = requirementAnalysisService.saveDocument(
+                        result.getSystemName(), result.getPrdDocumentId(), result.getPrdContent());
+                result.setSavedPrdPath(prdPath);
+            } catch (Exception e) {
+                // 文档保存失败不阻断整体流程
+            }
+        }
+
+        // ── 保存架构文档 ──
+        if (result.getArchContent() != null && result.getSavedArchPath() == null) {
+            try {
+                String archPath = architectAnalysisService.saveDocument(
+                        result.getSystemName(), result.getArchDocumentId(), result.getArchContent());
+                result.setSavedArchPath(archPath);
+            } catch (Exception e) {
+                // 文档保存失败不阻断整体流程
+            }
+        }
+
         saveTask(taskId, task);
-        return savedPath;
+        return result.getSavedProjectPath();
+    }
+
+    public void cancelTask(String taskId) {
+        GenerationTask task = getTask(taskId);
+        if (task == null) {
+            throw new IllegalArgumentException("任务不存在或已过期");
+        }
+        if (!"pending".equals(task.getStatus()) && !"running".equals(task.getStatus())) {
+            throw new IllegalArgumentException("只有进行中的任务才能取消（当前状态：" + task.getStatus() + "）");
+        }
+        task.setStatus("cancelled");
+        task.setMessage("任务已被用户取消，正在停止...");
+        saveTask(taskId, task);
     }
 
     public GenerationTask getTask(String taskId) {
@@ -85,12 +104,4 @@ public class TaskService {
         redisCache.set(TASK_KEY_PREFIX + taskId, task, TASK_TTL_HOURS, TimeUnit.HOURS);
     }
 
-    private void updateTaskStatus(String taskId, String status, String message) {
-        GenerationTask task = getTask(taskId);
-        if (task != null) {
-            task.setStatus(status);
-            task.setMessage(message);
-            saveTask(taskId, task);
-        }
-    }
 }

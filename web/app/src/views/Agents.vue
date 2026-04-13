@@ -14,7 +14,12 @@
 
     <div v-loading="loading" class="agents-grid">
       <el-row :gutter="24">
-        <el-col :span="8" v-for="agent in agents" :key="row.id" style="margin-bottom: 24px">
+        <el-col
+          :span="8"
+          v-for="agent in agents"
+          :key="agent.id"
+          style="margin-bottom: 24px"
+        >
           <el-card class="agent-card" :body-style="{ padding: '0px' }">
             <div class="agent-header">
               <div class="agent-avatar">
@@ -22,7 +27,9 @@
               </div>
               <div class="agent-title">
                 <h3>{{ agent.name }}</h3>
-                <el-tag size="small" effect="light" round>{{ agent.role || '智能专家' }}</el-tag>
+                <el-tag size="small" effect="light" round>{{
+                  agent.role || "智能专家"
+                }}</el-tag>
               </div>
               <div class="agent-status">
                 <el-switch
@@ -33,27 +40,33 @@
                 />
               </div>
             </div>
-            
+
             <div class="agent-body">
               <div class="agent-skills">
-                <el-tag 
-                  v-for="skill in parseCapabilities(agent.capabilities)" 
-                  :key="skill" 
-                  size="small" 
+                <el-tag
+                  v-for="skill in parseCapabilities(agent.capabilities)"
+                  :key="skill"
+                  size="small"
                   class="skill-tag"
                 >
                   {{ skill }}
                 </el-tag>
               </div>
-              
+
               <div class="agent-metrics">
                 <div class="metric-item">
                   <span class="metric-label">效率</span>
-                  <el-progress :percentage="agent.efficiencyScore" :color="customColors" />
+                  <el-progress
+                    :percentage="agent.efficiencyScore"
+                    :color="customColors"
+                  />
                 </div>
                 <div class="metric-item">
                   <span class="metric-label">成功率</span>
-                  <el-progress :percentage="agent.successRate" :color="customColors" />
+                  <el-progress
+                    :percentage="agent.successRate"
+                    :color="customColors"
+                  />
                 </div>
               </div>
             </div>
@@ -66,37 +79,59 @@
           </el-card>
         </el-col>
       </el-row>
-      
+
       <el-empty v-if="agents.length === 0" description="未发现活跃智能体" />
     </div>
 
     <!-- Edit Dialog -->
-    <el-dialog 
-      v-model="dialogVisible" 
-      title="配置智能体" 
+    <el-dialog
+      v-model="dialogVisible"
+      title="配置智能体"
       width="460px"
       class="custom-dialog"
     >
-      <el-form :model="editForm" :rules="rules" ref="formRef" label-position="top">
+      <el-form
+        :model="editForm"
+        :rules="rules"
+        ref="formRef"
+        label-position="top"
+      >
         <el-form-item label="名称" prop="name">
           <el-input v-model="editForm.name" placeholder="输入智能体名称" />
         </el-form-item>
         <el-form-item label="能力架构 (JSON 格式)" prop="capabilities">
-          <el-input v-model="editForm.capabilities" type="textarea" :rows="4" placeholder='{"skills": ["Java", "Spring Boot"]}' />
+          <el-input
+            v-model="editForm.capabilities"
+            type="textarea"
+            :rows="4"
+            placeholder='{"skills": ["Java", "Spring Boot"]}'
+          />
         </el-form-item>
         <div class="form-row">
           <el-form-item label="效率评分" prop="efficiencyScore" style="flex: 1">
-            <el-input-number v-model="editForm.efficiencyScore" :min="0" :max="100" style="width: 100%" />
+            <el-input-number
+              v-model="editForm.efficiencyScore"
+              :min="0"
+              :max="100"
+              style="width: 100%"
+            />
           </el-form-item>
           <el-form-item label="成功率" prop="successRate" style="flex: 1">
-            <el-input-number v-model="editForm.successRate" :min="0" :max="100" style="width: 100%" />
+            <el-input-number
+              v-model="editForm.successRate"
+              :min="0"
+              :max="100"
+              style="width: 100%"
+            />
           </el-form-item>
         </div>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="handleSave" :loading="saving">保存更改</el-button>
+          <el-button type="primary" @click="handleSave" :loading="saving"
+            >保存更改</el-button
+          >
         </div>
       </template>
     </el-dialog>
@@ -104,59 +139,61 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, UserFilled, Edit } from '@element-plus/icons-vue'
-import { agentApi } from '../api'
+import { ref, onMounted } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { Refresh, UserFilled, Edit } from "@element-plus/icons-vue";
+import { agentApi } from "../api";
 
-const loading = ref(false)
-const saving = ref(false)
-const agents = ref([])
-const dialogVisible = ref(false)
-const formRef = ref(null)
+const loading = ref(false);
+const saving = ref(false);
+const agents = ref([]);
+const dialogVisible = ref(false);
+const formRef = ref(null);
 
 const customColors = [
-  { color: '#f56c6c', percentage: 20 },
-  { color: '#e6a23c', percentage: 40 },
-  { color: '#5cb87a', percentage: 60 },
-  { color: '#1989fa', percentage: 80 },
-  { color: '#6366f1', percentage: 100 },
-]
+  { color: "#f56c6c", percentage: 20 },
+  { color: "#e6a23c", percentage: 40 },
+  { color: "#5cb87a", percentage: 60 },
+  { color: "#1989fa", percentage: 80 },
+  { color: "#6366f1", percentage: 100 },
+];
 
 const editForm = ref({
-  id: '',
-  name: '',
-  capabilities: '',
+  id: "",
+  name: "",
+  capabilities: "",
   efficiencyScore: 0,
-  successRate: 0
-})
+  successRate: 0,
+});
 
 const rules = {
-  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  capabilities: [{ required: true, message: '请输入能力描述', trigger: 'blur' }]
-}
+  name: [{ required: true, message: "请输入名称", trigger: "blur" }],
+  capabilities: [
+    { required: true, message: "请输入能力描述", trigger: "blur" },
+  ],
+};
 
 const loadAgents = async () => {
-  loading.value = true
+  loading.value = true;
   try {
-    const res = await agentApi.getAll()
-    agents.value = res.data
+    const res = await agentApi.getAll();
+    agents.value = res.data;
   } catch (error) {
-    console.error(error)
-    ElMessage.error('加载智能体失败')
+    console.error(error);
+    ElMessage.error("加载智能体失败");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 const parseCapabilities = (capabilities) => {
   try {
-    const obj = JSON.parse(capabilities)
-    return obj.skills || []
+    const obj = JSON.parse(capabilities);
+    return obj.skills || [];
   } catch {
-    return capabilities ? [capabilities] : []
+    return capabilities ? [capabilities] : [];
   }
-}
+};
 
 const showEditDialog = (agent) => {
   editForm.value = {
@@ -164,40 +201,40 @@ const showEditDialog = (agent) => {
     name: agent.name,
     capabilities: agent.capabilities,
     efficiencyScore: agent.efficiencyScore,
-    successRate: agent.successRate
-  }
-  dialogVisible.value = true
-}
+    successRate: agent.successRate,
+  };
+  dialogVisible.value = true;
+};
 
 const handleSave = async () => {
-  await formRef.value.validate()
-  saving.value = true
+  await formRef.value.validate();
+  saving.value = true;
 
   try {
-    await agentApi.update(editForm.value.id, editForm.value)
-    ElMessage.success('智能体配置已更新')
-    dialogVisible.value = false
-    loadAgents()
+    await agentApi.update(editForm.value.id, editForm.value);
+    ElMessage.success("智能体配置已更新");
+    dialogVisible.value = false;
+    loadAgents();
   } catch (error) {
-    console.error(error)
+    console.error(error);
   } finally {
-    saving.value = false
+    saving.value = false;
   }
-}
+};
 
 const toggleStatus = async (agent) => {
   try {
-    await agentApi.updateStatus(agent.id, agent.status)
-    ElMessage.success(`智能体已${agent.status === 'active' ? '上线' : '下线'}`)
+    await agentApi.updateStatus(agent.id, agent.status);
+    ElMessage.success(`智能体已${agent.status === "active" ? "上线" : "下线"}`);
   } catch (error) {
-    agent.status = agent.status === 'active' ? 'inactive' : 'active'
-    console.error(error)
+    agent.status = agent.status === "active" ? "inactive" : "active";
+    console.error(error);
   }
-}
+};
 
 onMounted(() => {
-  loadAgents()
-})
+  loadAgents();
+});
 </script>
 
 <style scoped>
@@ -226,7 +263,9 @@ onMounted(() => {
 }
 
 .agent-card {
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
   height: 100%;
 }
 

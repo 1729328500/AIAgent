@@ -11,6 +11,18 @@
         <el-tag :type="getStatusType(workflow.status)" effect="dark" round>
           {{ getStatusText(workflow.status) }}
         </el-tag>
+        <el-tag v-if="workflow.currentStep && workflow.status === 'running'" type="warning" plain round style="margin-left:8px;">
+          {{ workflow.currentStep }}
+        </el-tag>
+        <el-button
+          v-if="workflow.taskId && workflow.status === 'completed'"
+          type="primary"
+          size="small"
+          style="margin-left:12px;"
+          @click="router.push(`/preview/${workflow.taskId}`)"
+        >
+          预览产物
+        </el-button>
       </div>
     </div>
 
@@ -101,19 +113,22 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Back, Document, Timer } from '@element-plus/icons-vue'
 import { workflowApi, artifactApi } from '../api'
 import VueMarkdown from 'vue3-markdown-it'
 
 const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const workflow = ref(null)
 const steps = ref([])
 const artifacts = ref([])
 const activeStepId = ref(null)
+
+let pollTimer = null
 
 const activeStep = computed(() => {
   return steps.value.find(s => s.id === activeStepId.value) || steps.value[0]
@@ -132,15 +147,46 @@ const loadWorkflowDetail = async () => {
     workflow.value = workflowRes.data
     steps.value = stepsRes.data
     artifacts.value = artifactsRes.data
-    
-    if (steps.value.length > 0) {
-      activeStepId.value = steps.value[0].id
+
+    if (steps.value.length > 0 && !activeStepId.value) {
+      activeStepId.value = steps.value[steps.value.length - 1].id
     }
   } catch (error) {
     console.error(error)
     ElMessage.error('详情加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+/** 轮询：运行中每 5 秒刷新一次步骤列表和工作流状态 */
+const startPolling = () => {
+  pollTimer = setInterval(async () => {
+    try {
+      const id = route.params.id
+      const [wfRes, stepsRes] = await Promise.all([
+        workflowApi.getById(id),
+        workflowApi.getSteps(id)
+      ])
+      workflow.value = wfRes.data
+      steps.value = stepsRes.data
+      // 自动定位到最新步骤
+      if (steps.value.length > 0) {
+        activeStepId.value = steps.value[steps.value.length - 1].id
+      }
+      if (wfRes.data.status !== 'running') {
+        stopPolling()
+      }
+    } catch (e) {
+      console.error('轮询失败', e)
+    }
+  }, 5000)
+}
+
+const stopPolling = () => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
   }
 }
 
@@ -173,37 +219,29 @@ const formatFileSize = (bytes) => {
 }
 
 const getStatusType = (status) => {
-  const map = {
-    'pending': 'info',
-    'running': 'warning',
-    'completed': 'success',
-    'failed': 'danger'
-  }
+  const map = { pending: 'info', running: 'warning', completed: 'success', failed: 'danger' }
   return map[status] || 'info'
 }
 
 const getStatusText = (status) => {
-  const map = {
-    'pending': '等待中',
-    'running': '正在执行',
-    'completed': '执行成功',
-    'failed': '执行失败',
-    'cancelled': '已取消'
-  }
+  const map = { pending: '等待中', running: '正在执行', completed: '执行成功', failed: '执行失败', cancelled: '已取消' }
   return map[status] || status
 }
 
 const getStepType = (status) => {
-  const map = {
-    'completed': 'success',
-    'failed': 'danger',
-    'running': 'primary'
-  }
+  const map = { completed: 'success', failed: 'danger', running: 'primary' }
   return map[status] || 'info'
 }
 
-onMounted(() => {
-  loadWorkflowDetail()
+onMounted(async () => {
+  await loadWorkflowDetail()
+  if (workflow.value?.status === 'running') {
+    startPolling()
+  }
+})
+
+onUnmounted(() => {
+  stopPolling()
 })
 </script>
 

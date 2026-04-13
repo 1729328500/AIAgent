@@ -71,7 +71,7 @@
                 /></el-icon>
                 <el-icon
                   class="success-icon"
-                  v-else-if="result?.status === 'completed'"
+                  v-else-if="result?.status === 'success'"
                   ><CircleCheckFilled
                 /></el-icon>
                 <span class="task-title"
@@ -83,8 +83,20 @@
                 effect="dark"
                 round
               >
-                {{ result?.status?.toUpperCase() || "PENDING" }}
+                {{ getStatusLabel(result?.status) || "PENDING" }}
               </el-tag>
+              <!-- 取消按钮：仅在任务进行中时显示 -->
+              <el-button
+                v-if="taskId && (result?.status === 'pending' || result?.status === 'running')"
+                type="danger"
+                plain
+                size="small"
+                :loading="cancelling"
+                @click="handleCancel"
+                style="margin-left: 12px;"
+              >
+                取消任务
+              </el-button>
             </div>
           </template>
 
@@ -105,10 +117,34 @@
 
             <!-- Real-time Logs -->
             <div class="status-feed" ref="feedRef">
-              <div v-if="result?.errorMsg" class="error-msg">
+              <!-- 进度消息（运行中时显示） -->
+              <div v-if="result?.status === 'running' || result?.status === 'pending'" class="progress-msg">
+                <el-icon class="spin-icon"><Loading /></el-icon>
+                <span>{{ result?.message || '正在处理...' }}</span>
+                <el-button
+                  v-if="result?.workflowId"
+                  text
+                  type="primary"
+                  size="small"
+                  style="margin-left:auto; flex-shrink:0;"
+                  @click="router.push(`/workflow/${result.workflowId}`)"
+                >
+                  实时日志
+                </el-button>
+              </div>
+              <div v-if="result?.status === 'failed'" class="error-msg">
                 <el-alert
-                  :title="result.errorMsg"
+                  :title="result.message || '生成失败'"
                   type="error"
+                  show-icon
+                  :closable="false"
+                />
+              </div>
+              <div v-else-if="result?.status === 'cancelled'" class="error-msg">
+                <el-alert
+                  title="任务已取消"
+                  description="工作流已在当前步骤完成后停止，您可以重新提交构建请求。"
+                  type="info"
                   show-icon
                   :closable="false"
                 />
@@ -122,6 +158,17 @@
                   <div class="detail-item">
                     <span class="label">系统名称:</span>
                     <span class="value">{{ result.result?.systemName }}</span>
+                  </div>
+                  <!-- 审查警告：代码审查轮次用完后仍有未解决问题 -->
+                  <div v-if="result.result?.errorMsg" class="review-warning">
+                    <el-alert
+                      title="代码审查提示（建议手动确认）"
+                      :description="result.result.errorMsg"
+                      type="warning"
+                      show-icon
+                      :closable="false"
+                      style="margin-bottom: 16px;"
+                    />
                   </div>
                   <div
                     class="detail-item"
@@ -138,6 +185,15 @@
                       @click="viewPreview(result.taskId)"
                     >
                       预览产物 &amp; 确认保存
+                    </el-button>
+                    <el-button
+                      v-if="result.result?.workflowId"
+                      text
+                      type="primary"
+                      size="small"
+                      @click="router.push(`/workflow/${result.result.workflowId}`)"
+                    >
+                      查看构建详情
                     </el-button>
                   </div>
                 </div>
@@ -187,7 +243,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import {
@@ -200,10 +256,27 @@ import { taskApi, workflowApi } from "../api";
 
 const router = useRouter();
 const loading = ref(false);
+const cancelling = ref(false);
 const taskId = ref("");
 const result = ref(null);
 const recentWorkflows = ref([]);
 const feedRef = ref(null);
+
+// SSE 连接句柄，用于组件销毁时清理
+let eventSource = null;
+
+// localStorage key：记录进行中的任务，切页面后返回时恢复
+const ACTIVE_TASK_KEY = "agentai_active_task";
+
+const saveActiveTask = (id) => {
+  localStorage.setItem(ACTIVE_TASK_KEY, id);
+};
+
+const clearActiveTask = () => {
+  localStorage.removeItem(ACTIVE_TASK_KEY);
+};
+
+const getStoredTaskId = () => localStorage.getItem(ACTIVE_TASK_KEY) || null;
 
 const form = ref({
   userInput: "",
@@ -212,10 +285,13 @@ const form = ref({
 const currentStep = computed(() => {
   if (!result.value) return 0;
   const status = result.value.status;
-  if (status === "completed") return 4;
-  if (status === "failed") return 0;
-  // 这里可以根据更细粒度的进度来映射
-  return 2;
+  const msg = result.value.message || '';
+  if (status === 'success') return 4;
+  if (status === 'failed') return 0;
+  if (msg.includes('架构')) return 1;
+  if (msg.includes('代码') || msg.includes('骨架') || msg.includes('Controller') || msg.includes('前端')) return 2;
+  if (msg.includes('审查') || msg.includes('修复') || msg.includes('完整性')) return 3;
+  return 1;
 });
 
 const handleSubmit = async () => {
@@ -231,31 +307,105 @@ const handleSubmit = async () => {
   try {
     const res = await taskApi.submit(form.value.userInput);
     taskId.value = res.data.taskId;
+    saveActiveTask(res.data.taskId); // 持久化，切页面后可恢复
     ElMessage.success("智能体团队已就绪，开始构建...");
-    pollResult();
+    connectSSE(res.data.taskId);
   } catch (error) {
     console.error(error);
     loading.value = false;
   }
 };
 
-const pollResult = () => {
-  const timer = setInterval(async () => {
-    try {
-      const res = await taskApi.getResult(taskId.value);
-      result.value = res.data;
+/**
+ * 通过 SSE 订阅任务进度。
+ * 服务端每 3 秒推送一次 "update" 事件；任务终态后服务端关闭连接。
+ * EventSource 在网络短暂中断时会自动重连，无需手动处理。
+ */
+const connectSSE = (id) => {
+  closeSSE(); // 关闭旧连接（如有）
 
-      if (res.data.status === "completed" || res.data.status === "failed") {
-        clearInterval(timer);
+  const url = `http://localhost:8080/api/agent/task/${id}/stream`;
+  const es = new EventSource(url);
+  eventSource = es;
+
+  es.addEventListener("update", (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      result.value = data;
+      const status = data.status;
+      if (status === "success" || status === "failed" || status === "cancelled") {
         loading.value = false;
+        cancelling.value = false;
+        clearActiveTask(); // 任务结束，清除持久化记录
+        closeSSE();
         loadRecentWorkflows();
       }
-    } catch (error) {
-      clearInterval(timer);
-      loading.value = false;
+    } catch (err) {
+      console.error("SSE parse error:", err);
     }
-  }, 3000);
+  });
+
+  es.addEventListener("error", () => {
+    if (!eventSource || es.readyState === EventSource.CLOSED) {
+      // 已主动关闭（导航离开）或服务端正常结束流，忽略
+      return;
+    }
+    // readyState === CONNECTING：网络短暂中断，浏览器正在自动重连，无需干预
+  });
 };
+
+const closeSSE = () => {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+};
+
+/**
+ * 挂载时恢复进行中的任务。
+ * 若 localStorage 中有 taskId，先通过 REST 拉取当前状态，
+ * 若任务仍在进行则重新建立 SSE 连接；已终止则直接展示结果。
+ */
+onMounted(async () => {
+  loadRecentWorkflows();
+
+  const storedId = getStoredTaskId();
+  if (!storedId) return;
+
+  taskId.value = storedId;
+  loading.value = true;
+
+  try {
+    const res = await taskApi.getResult(storedId);
+    const task = res.data;
+
+    if (!task) {
+      // Redis 中已过期
+      clearActiveTask();
+      loading.value = false;
+      return;
+    }
+
+    result.value = task;
+    const status = task.status;
+
+    if (status === "success" || status === "failed" || status === "cancelled") {
+      // 离开期间任务已完成
+      loading.value = false;
+      clearActiveTask();
+    } else {
+      // 仍在运行，重新连接 SSE
+      connectSSE(storedId);
+    }
+  } catch {
+    loading.value = false;
+    clearActiveTask();
+  }
+});
+
+onUnmounted(() => {
+  closeSSE(); // 仅关闭连接，不清除 localStorage，返回时可恢复
+});
 
 const loadRecentWorkflows = async () => {
   try {
@@ -274,19 +424,40 @@ const viewWorkflow = (id) => {
   router.push(`/workflow/${id}`);
 };
 
+const handleCancel = async () => {
+  if (!taskId.value) return;
+  cancelling.value = true;
+  try {
+    await taskApi.cancel(taskId.value);
+    ElMessage.info("取消请求已发送，任务将在当前步骤完成后停止");
+  } catch (error) {
+    cancelling.value = false;
+    console.error(error);
+  }
+};
+
+const getStatusLabel = (status) => {
+  const map = {
+    pending: "等待中",
+    running: "运行中",
+    success: "已完成",
+    failed: "已失败",
+    cancelled: "已取消",
+  };
+  return map[status] || (status?.toUpperCase() ?? "PENDING");
+};
+
 const getStatusType = (status) => {
   const map = {
     pending: "info",
     running: "warning",
+    success: "success",
     completed: "success",
+    cancelled: "info",
     failed: "danger",
   };
   return map[status] || "info";
 };
-
-onMounted(() => {
-  loadRecentWorkflows();
-});
 </script>
 
 <style scoped>
@@ -425,6 +596,24 @@ onMounted(() => {
   border-radius: 12px;
   padding: 24px;
   border: 1px solid #dcfce7;
+}
+
+.progress-msg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  background-color: #f0f4ff;
+  border-radius: 10px;
+  border: 1px solid #c7d2fe;
+  color: #4338ca;
+  font-size: 0.95rem;
+}
+
+.spin-icon {
+  animation: rotate 1.5s linear infinite;
+  color: #6366f1;
+  flex-shrink: 0;
 }
 
 .detail-item {

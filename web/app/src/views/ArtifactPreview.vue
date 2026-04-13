@@ -23,6 +23,26 @@
           <el-icon class="el-icon--left"><Download /></el-icon>
           保存到本地
         </el-button>
+
+        <!-- E2B 沙箱部署按钮 -->
+        <el-button
+          v-if="canSave && task?.sandboxStatus !== 'running'"
+          type="warning"
+          :loading="deploying"
+          @click="handleDeploy"
+          :disabled="deploying"
+        >
+          <el-icon class="el-icon--left"><Monitor /></el-icon>
+          {{ deploying ? '部署中...' : '部署到沙箱预览' }}
+        </el-button>
+        <el-button
+          v-if="task?.sandboxStatus === 'running' && task?.sandboxUrl"
+          type="success"
+          @click="openSandbox"
+        >
+          <el-icon class="el-icon--left"><Link /></el-icon>
+          打开沙箱预览
+        </el-button>
       </div>
     </div>
 
@@ -45,6 +65,72 @@
         :closable="false"
         class="saved-banner"
       />
+
+      <!-- Sandbox deploy banner -->
+      <div v-if="task?.sandboxStatus && task.sandboxStatus !== 'none'" class="sandbox-banner">
+        <!-- Deploying state -->
+        <el-alert
+          v-if="task.sandboxStatus === 'deploying'"
+          title="正在部署到 E2B 沙箱..."
+          description="正在上传文件并启动 Vite 开发服务器，请稍候"
+          type="info"
+          show-icon
+          :closable="false"
+        />
+        <!-- Failed state -->
+        <el-alert
+          v-else-if="task.sandboxStatus === 'failed'"
+          title="沙箱部署失败"
+          :description="task.sandboxError || '未知错误'"
+          type="error"
+          show-icon
+          :closable="false"
+        />
+        <!-- Running state -->
+        <el-card v-else-if="task.sandboxStatus === 'running'" class="sandbox-card" shadow="never">
+          <div class="sandbox-info">
+            <div class="sandbox-left">
+              <el-icon class="sandbox-icon" color="#67c23a"><Monitor /></el-icon>
+              <div class="sandbox-text">
+                <div class="sandbox-title">沙箱部署成功</div>
+                <div class="sandbox-url">
+                  <a :href="task.sandboxUrl" target="_blank" rel="noopener">{{ task.sandboxUrl }}</a>
+                </div>
+                <div class="sandbox-tip">
+                  npm install 正在后台运行，请等待约 <strong>1-2 分钟</strong>后再访问。沙箱将在 <strong>30 分钟</strong>后自动销毁。
+                </div>
+              </div>
+            </div>
+            <div class="sandbox-actions">
+              <el-button type="primary" size="small" @click="openSandbox">
+                <el-icon><Link /></el-icon> 在新标签页打开
+              </el-button>
+              <el-button type="default" size="small" @click="copyUrl">
+                <el-icon><CopyDocument /></el-icon> 复制链接
+              </el-button>
+            </div>
+          </div>
+        </el-card>
+      </div>
+
+      <!-- Code review warnings -->
+      <el-collapse v-if="reviewWarnings" class="review-warnings-collapse">
+        <el-collapse-item name="warnings">
+          <template #title>
+            <el-tag type="warning" effect="plain" size="small">代码审查警告</el-tag>
+            <span style="margin-left: 8px; font-size: 0.8125rem; color: var(--text-secondary)">
+              以下问题不影响项目运行，仅供参考（点击展开）
+            </span>
+          </template>
+          <el-alert
+            :title="reviewWarnings"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="review-warning-alert"
+          />
+        </el-collapse-item>
+      </el-collapse>
 
       <el-row :gutter="24">
         <!-- Left: File Tree -->
@@ -126,7 +212,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Back, Download, FolderOpened, Folder,
-  Document, CopyDocument
+  Document, CopyDocument, Monitor, Link
 } from '@element-plus/icons-vue'
 import { taskApi } from '../api'
 import MarkdownIt from 'markdown-it'
@@ -136,6 +222,7 @@ const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
 const saving = ref(false)
+const deploying = ref(false)
 const error = ref('')
 const task = ref(null)
 const activeFile = ref('')
@@ -158,12 +245,33 @@ const md = new MarkdownIt({
 
 const systemName = computed(() => task.value?.result?.systemName || '')
 const projectFiles = computed(() => task.value?.result?.projectFiles || {})
-const fileCount = computed(() => Object.keys(projectFiles.value).length)
+
+// 代码审查警告（从 errorMsg 中提取 WARNING 块）
+const reviewWarnings = computed(() => {
+  const msg = task.value?.result?.errorMsg || task.value?.message || ''
+  if (msg.includes('【代码审查警告')) {
+    const start = msg.indexOf('【代码审查警告')
+    return msg.substring(start).trim()
+  }
+  return ''
+})
+
+// 合并文档（PRD / 架构）到虚拟文件树，方便统一预览
+const allFiles = computed(() => {
+  const files = { ...projectFiles.value }
+  const prdContent = task.value?.result?.prdContent
+  const archContent = task.value?.result?.archContent
+  if (prdContent) files['docs/需求分析文档.md'] = prdContent
+  if (archContent) files['docs/系统架构文档.md'] = archContent
+  return files
+})
+
+const fileCount = computed(() => Object.keys(allFiles.value).length)
 const canSave = computed(() => task.value?.status === 'success' && fileCount.value > 0)
 
 const activeContent = computed(() => {
   if (!activeFile.value) return ''
-  return projectFiles.value[activeFile.value] || ''
+  return allFiles.value[activeFile.value] || ''
 })
 
 const activePathSegments = computed(() => {
@@ -197,7 +305,7 @@ const fileTree = computed(() => {
   const root = []
   const dirMap = {}
 
-  const sortedPaths = Object.keys(projectFiles.value).sort()
+  const sortedPaths = Object.keys(allFiles.value).sort()
   for (const filePath of sortedPaths) {
     const parts = filePath.split('/')
     let current = root
@@ -282,6 +390,41 @@ const handleSave = async () => {
   }
 }
 
+const handleDeploy = async () => {
+  deploying.value = true
+  // Optimistically update UI status
+  if (task.value) task.value.sandboxStatus = 'deploying'
+  try {
+    ElMessage.info('正在部署到 E2B 沙箱，请稍候（预计 30-60 秒）...')
+    const res = await taskApi.deployToSandbox(route.params.taskId)
+    // Refresh task to get updated sandbox info
+    const updated = await taskApi.getResult(route.params.taskId)
+    task.value = updated.data
+    ElMessage.success(res.data.message || '部署成功！请等待约 1-2 分钟后访问预览链接')
+  } catch (e) {
+    if (task.value) task.value.sandboxStatus = 'failed'
+    ElMessage.error('部署失败: ' + (e.response?.data?.message || e.message))
+  } finally {
+    deploying.value = false
+  }
+}
+
+const openSandbox = () => {
+  const url = task.value?.sandboxUrl
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+const copyUrl = async () => {
+  const url = task.value?.sandboxUrl
+  if (!url) return
+  try {
+    await navigator.clipboard.writeText(url)
+    ElMessage.success('链接已复制')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+
 onMounted(async () => {
   try {
     const res = await taskApi.getResult(route.params.taskId)
@@ -289,12 +432,12 @@ onMounted(async () => {
     if (task.value?.result?.savedProjectPath) {
       savedPath.value = task.value.result.savedProjectPath
     }
-    // Auto-select first file
-    const files = Object.keys(projectFiles.value)
+    // Auto-select first file — prefer docs, then README, then first file
+    const files = Object.keys(allFiles.value)
     if (files.length > 0) {
-      // Prefer README or first md
+      const prdDoc = files.find(f => f.includes('需求分析文档'))
       const readme = files.find(f => f.toLowerCase().includes('readme'))
-      activeFile.value = readme || files[0]
+      activeFile.value = prdDoc || readme || files[0]
     }
   } catch (e) {
     error.value = '加载失败: ' + e.message
@@ -498,5 +641,81 @@ onMounted(async () => {
 .code-block :deep(.hljs) {
   background: transparent;
   padding: 0;
+}
+
+/* ── Sandbox banner ─────────────────────────────────── */
+.sandbox-banner {
+  margin-bottom: 16px;
+}
+
+.sandbox-card {
+  border: 1px solid #a3d977;
+  background: #f0f9eb;
+  border-radius: 8px;
+}
+
+.sandbox-info {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sandbox-left {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  flex: 1;
+}
+
+.sandbox-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.sandbox-text {
+  flex: 1;
+}
+
+.sandbox-title {
+  font-weight: 700;
+  font-size: 0.9375rem;
+  color: #3d8e24;
+  margin-bottom: 4px;
+}
+
+.sandbox-url a {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.875rem;
+  color: #409eff;
+  word-break: break-all;
+}
+
+.sandbox-tip {
+  margin-top: 6px;
+  font-size: 0.8125rem;
+  color: #5a7a45;
+}
+
+.sandbox-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Review warnings ────────────────────────────────── */
+.review-warnings-collapse {
+  margin-bottom: 16px;
+  border: 1px solid #e6a23c44;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.review-warning-alert :deep(.el-alert__title) {
+  white-space: pre-wrap;
+  font-size: 0.8125rem;
+  line-height: 1.7;
 }
 </style>
