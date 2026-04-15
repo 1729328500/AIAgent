@@ -5,7 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 import top.whyh.agentai.result.SandboxResult;
 
@@ -42,195 +42,74 @@ public class SandboxDeploymentService {
     @Value("${e2b.api-key:}")
     private String apiKey;
 
+    @Value("${e2b.proxy-url:http://localhost:3002}")
+    private String proxyUrl;
+
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
     public SandboxDeploymentService(ObjectMapper objectMapper) {
-        this.restTemplate = new RestTemplate();
+        // npm install 最多 3 分钟 + vite 启动最多 60 秒，总超时设为 5 分钟
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(10_000);
+        factory.setReadTimeout(300_000);
+        this.restTemplate = new RestTemplate(factory);
         this.objectMapper = objectMapper;
     }
 
     /**
-     * 将前端项目部署到 E2B 沙箱。
+     * 将前端项目通过 Node.js 代理服务部署到 E2B 沙箱。
      *
      * @param systemName   系统名称（用于 metadata 标记）
      * @param projectFiles 生成的完整项目文件 Map（路径 → 内容）
      * @return 部署结果，包含预览 URL 或错误信息
      */
+    public String getProxyUrl() {
+        return proxyUrl;
+    }
+
     public SandboxResult deployFrontend(String systemName, Map<String, String> projectFiles) {
-        if (!isConfigured()) {
-            return SandboxResult.failure("E2B API Key 未配置，请在 application.yml 中设置 e2b.api-key");
-        }
+        log.info("开始通过代理服务部署 [{}] 到 E2B 沙箱", systemName);
 
-        // 提取前端文件（去掉 frontend/ 前缀）
-        Map<String, String> frontendFiles = projectFiles.entrySet().stream()
-                .filter(e -> e.getKey().startsWith("frontend/"))
-                .collect(Collectors.toMap(
-                        e -> e.getKey().substring("frontend/".length()),
-                        Map.Entry::getValue,
-                        (a, b) -> a,
-                        LinkedHashMap::new
-                ));
-
-        if (frontendFiles.isEmpty()) {
-            return SandboxResult.failure("未找到前端文件（frontend/ 目录为空）");
-        }
-
-        log.info("开始部署 [{}] 到 E2B 沙箱 | 前端文件数: {}", systemName, frontendFiles.size());
-
-        String sandboxId = null;
         try {
-            // 1. 创建沙箱
-            sandboxId = createSandbox(systemName);
-            log.info("E2B 沙箱已创建 | sandboxId: {}", sandboxId);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
 
-            // 2. 上传文件（优先核心文件，控制数量）
-            List<Map.Entry<String, String>> prioritizedFiles = prioritizeFiles(frontendFiles);
-            uploadFiles(sandboxId, prioritizedFiles);
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("systemName", systemName);
+            requestBody.put("projectFiles", projectFiles);
 
-            // 3. 启动 npm 安装 + Vite 开发服务器（后台运行）
-            startDevServer(sandboxId);
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                    proxyUrl + "/deploy-frontend",
+                    new HttpEntity<>(requestBody, headers),
+                    Map.class
+            );
 
-            // 4. 构建预览 URL
-            String previewUrl = buildPortUrl(sandboxId, FRONTEND_PORT);
-            log.info("E2B 沙箱部署成功 | sandboxId: {} | previewUrl: {}", sandboxId, previewUrl);
-
-            return SandboxResult.success(sandboxId, previewUrl, SANDBOX_TIMEOUT_SECONDS);
-
-        } catch (HttpClientErrorException e) {
-            String body = e.getResponseBodyAsString();
-            log.error("E2B API 请求失败 | status: {} | body: {}", e.getStatusCode(), body);
-            return SandboxResult.failure("E2B API 错误 [" + e.getStatusCode() + "]: " + body);
-        } catch (Exception e) {
-            log.error("E2B 沙箱部署失败 | sandboxId: {} | 错误: {}", sandboxId, e.getMessage(), e);
-            return SandboxResult.failure("沙箱部署失败: " + e.getMessage());
-        }
-    }
-
-    // ─── Private helpers ──────────────────────────────────────────────────────
-
-    private String createSandbox(String systemName) throws Exception {
-        HttpHeaders headers = buildHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("templateID", TEMPLATE_ID);
-        body.put("timeout", SANDBOX_TIMEOUT_SECONDS);
-        body.put("metadata", Map.of("project", systemName, "source", "agentai"));
-
-        @SuppressWarnings("unchecked")
-        ResponseEntity<Map<String, Object>> response = (ResponseEntity<Map<String, Object>>) (ResponseEntity<?>)
-                restTemplate.exchange(
-                        E2B_API_BASE + "/sandboxes", // 移除了 /v1
-                        HttpMethod.POST,
-                        new HttpEntity<>(body, headers),
-                        Map.class
-                );
-
-        if (response.getBody() == null || !response.getBody().containsKey("sandboxID")) {
-            throw new RuntimeException("创建沙箱响应异常，缺少 sandboxID 字段：" + response.getBody());
-        }
-
-        return String.valueOf(response.getBody().get("sandboxID"));
-    }
-
-    /** 按优先级排序文件，优先上传核心文件 */
-    private List<Map.Entry<String, String>> prioritizeFiles(Map<String, String> files) {
-        List<Map.Entry<String, String>> all = new ArrayList<>(files.entrySet());
-        all.sort((a, b) -> {
-            int pa = getPriority(a.getKey());
-            int pb = getPriority(b.getKey());
-            return Integer.compare(pa, pb);
-        });
-        if (all.size() > MAX_UPLOAD_FILES) {
-            log.warn("前端文件总数 {} 超过上限 {}，将跳过低优先级文件", all.size(), MAX_UPLOAD_FILES);
-            return all.subList(0, MAX_UPLOAD_FILES);
-        }
-        return all;
-    }
-
-    private int getPriority(String path) {
-        for (int i = 0; i < PRIORITY_KEYWORDS.size(); i++) {
-            if (path.contains(PRIORITY_KEYWORDS.get(i))) return i;
-        }
-        // 视图文件次高优先级，其余最低
-        if (path.endsWith(".vue")) return PRIORITY_KEYWORDS.size();
-        if (path.endsWith(".js") || path.endsWith(".ts")) return PRIORITY_KEYWORDS.size() + 1;
-        return PRIORITY_KEYWORDS.size() + 2;
-    }
-
-    private void uploadFiles(String sandboxId, List<Map.Entry<String, String>> files) {
-        int success = 0;
-        for (Map.Entry<String, String> entry : files) {
-            try {
-                String remotePath = "/workspace/" + entry.getKey();
-                uploadFile(sandboxId, remotePath, entry.getValue());
-                success++;
-            } catch (Exception e) {
-                log.warn("上传文件失败 [{}]: {}", entry.getKey(), e.getMessage());
+            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+                Map<String, Object> body = response.getBody();
+                if (Boolean.TRUE.equals(body.get("success"))) {
+                    String sandboxId = (String) body.get("sandboxId");
+                    String previewUrl = (String) body.get("previewUrl");
+                    Integer timeoutSeconds = (Integer) body.get("timeoutSeconds");
+                    log.info("E2B 沙箱部署成功 (via Proxy) | sandboxId: {} | previewUrl: {}", sandboxId, previewUrl);
+                    return SandboxResult.success(sandboxId, previewUrl, timeoutSeconds != null ? timeoutSeconds : 1800);
+                } else {
+                    String error = (String) body.get("error");
+                    return SandboxResult.failure("代理服务返回错误: " + error);
+                }
+            } else {
+                return SandboxResult.failure("调用代理服务失败，HTTP 状态码: " + response.getStatusCode());
             }
+
+        } catch (Exception e) {
+            log.error("调用 E2B 代理服务失败 | 错误: {}", e.getMessage(), e);
+            return SandboxResult.failure("无法连接到 E2B 代理服务: " + e.getMessage() + "。请确保 Node.js 代理服务已启动。");
         }
-        log.info("文件上传完成 | 成功: {}/{}", success, files.size());
     }
 
-    private void uploadFile(String sandboxId, String remotePath, String content) {
-        HttpHeaders headers = buildHeaders();
-        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-
-// 注意：新端点使用 JSON body 来传递路径和内容，而不是 query param 和 raw body
-        Map<String, Object> uploadBody = new HashMap<>();
-        uploadBody.put("path", remotePath); // 使用原始路径，无需在URL中编码
-        uploadBody.put("content", content);
-
-        restTemplate.exchange(
-                E2B_API_BASE + "/sandboxes/" + sandboxId + "/filesystem/write",
-                HttpMethod.POST,
-                new HttpEntity<>(uploadBody, headers), // 发送 JSON body
-                String.class
-        );
-    }
-
-    private void startDevServer(String sandboxId) throws Exception {
-        HttpHeaders headers = buildHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        // npm install 完成后启动 Vite dev server，绑定 0.0.0.0 以便 E2B 端口转发
-        String cmd = String.format(
-                "cd /workspace && npm install --legacy-peer-deps --prefer-offline 2>&1 | tail -5 " +
-                "&& npm run dev -- --host 0.0.0.0 --port %d", FRONTEND_PORT);
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("cmd", cmd);
-        body.put("cwd", "/workspace");
-        // timeoutMs: 仅等待 15 秒即返回，进程继续在沙箱中后台运行
-        body.put("timeoutMs", 15000);
-
-        @SuppressWarnings("unchecked")
-        ResponseEntity<Map<String, Object>> response = (ResponseEntity<Map<String, Object>>) (ResponseEntity<?>)
-                restTemplate.exchange(
-                        E2B_API_BASE + "/sandboxes/" + sandboxId + "/processes", // 移除了 /v1
-                        HttpMethod.POST,
-                        new HttpEntity<>(body, headers),
-                        Map.class
-                );
-
-        String processId = response.getBody() != null ?
-                String.valueOf(response.getBody().getOrDefault("processID", "unknown")) : "unknown";
-        log.info("开发服务器进程已启动 | sandboxId: {} | processId: {}", sandboxId, processId);
-    }
-
-    /** E2B 端口转发 URL 格式：https://{port}-{sandboxId}.e2b.dev */
-    private String buildPortUrl(String sandboxId, int port) {
-        return "https://" + port + "-" + sandboxId + ".e2b.dev";
-    }
-
-    private HttpHeaders buildHeaders() {
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-API-Key", apiKey);
-        return headers;
-    }
+    // ─── Private helpers (已废弃，保留占位或删除) ──────────────────────────────────────────────────────
 
     private boolean isConfigured() {
-        return apiKey != null && !apiKey.isBlank();
+        return true; // 代理服务自己持有 API Key
     }
 }

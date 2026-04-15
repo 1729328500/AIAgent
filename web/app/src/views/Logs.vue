@@ -7,10 +7,18 @@
 
       <el-form :inline="true" :model="queryForm">
         <el-form-item label="用户ID">
-          <el-input v-model="queryForm.userId" placeholder="请输入用户ID" clearable />
+          <el-input
+            v-model="queryForm.userId"
+            placeholder="请输入用户ID"
+            clearable
+          />
         </el-form-item>
         <el-form-item label="操作">
-          <el-input v-model="queryForm.action" placeholder="请输入操作" clearable />
+          <el-input
+            v-model="queryForm.action"
+            placeholder="请输入操作"
+            clearable
+          />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="loadLogs">查询</el-button>
@@ -39,36 +47,36 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { logApi } from '../api'
+import { ref, onMounted } from "vue";
+import { logApi } from "../api";
 
-const loading = ref(false)
-const logs = ref([])
-const total = ref(0)
+const loading = ref(false);
+const logs = ref([]);
+const total = ref(0);
 
 const queryForm = ref({
   pageNum: 1,
   pageSize: 10,
-  userId: '',
-  action: ''
-})
+  userId: "",
+  action: "",
+});
 
 const loadLogs = async () => {
-  loading.value = true
+  loading.value = true;
   try {
-    const res = await logApi.getPage(queryForm.value)
-    logs.value = res.data.records
-    total.value = res.data.total
+    const res = await logApi.getPage(queryForm.value);
+    logs.value = res.data.records;
+    total.value = res.data.total;
   } catch (error) {
-    console.error(error)
+    console.error(error);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 onMounted(() => {
-  loadLogs()
-})
+  loadLogs();
+});
 </script>
 
 <style scoped>

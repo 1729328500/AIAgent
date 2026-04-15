@@ -16,11 +16,16 @@ public class Artifact {
 
     private String taskId;
 
+    private String workflowId;
+
     private String artifactType;
 
     private String name;
 
+    /** 存储实际内容，如 PRD 文本、架构图文本或项目文件 JSON */
     private String content;
+
+    private Long fileSize;
 
     private String status;
 

@@ -36,18 +36,36 @@ public class FrontendSkeletonGenerator {
                 export default defineConfig({
                   plugins: [vue()],
                   server: {
+                    host: '0.0.0.0',
+                    port: 5173,
+                    allowedHosts: true, // 允许所有主机名访问，支持沙箱预览
                     proxy: {
                       '/api': { target: 'http://localhost:8080', changeOrigin: true }
                     }
                   }
                 });
                 [FILE_END]
+                [FILE_START] frontend/index.html
+                <!DOCTYPE html>
+                <html lang="zh-CN">
+                  <head>
+                    <meta charset="UTF-8" />
+                    <link rel="icon" href="/favicon.ico" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    <title>%s</title>
+                  </head>
+                  <body>
+                    <div id="app"></div>
+                    <script type="module" src="/src/main.js"></script>
+                  </body>
+                </html>
+                [FILE_END]
 
                 【PRD】
                 %s
                 【架构】
                 %s
-                """, systemName, prdContent, archContent);
+                """, systemName, systemName, prdContent, archContent);
         Map<String, String> variables = new LinkedHashMap<>();
         variables.put("project.name", systemName);
         variables.put("required.files", """
@@ -71,6 +89,7 @@ public class FrontendSkeletonGenerator {
         List<String> requiredFiles = List.of(
             "frontend/package.json",
             "frontend/vite.config.js",
+            "frontend/index.html",
             "frontend/src/main.js",
             "frontend/src/App.vue"
         );

@@ -27,9 +27,9 @@ public class AsyncTaskRunner {
     private static final long TASK_TTL_HOURS = 24;
 
     @Async
-    public void run(String taskId, String userInput) {
-        // 1. 立即创建 WorkflowInstance，前端可通过 workflowId 跳转详情
-        String workflowId = workflowService.createWorkflow(taskId, "处理中...");
+    public void run(String taskId, String userInput, String userId) {
+        // 1. 立即创建 WorkflowInstance（带 userId），前端可通过 workflowId 跳转详情
+        String workflowId = workflowService.createWorkflow(taskId, "处理中...", userId);
 
         // 2. 把 workflowId 写回 Redis，SSE 推送时前端即可读到
         GenerationTask task = getTask(taskId);

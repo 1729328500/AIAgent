@@ -57,6 +57,9 @@ export const workflowApi = {
   },
   cancel(id) {
     return request.post(`/api/workflow/${id}/cancel`)
+  },
+  delete(id) {
+    return request.delete(`/api/workflow/${id}`)
   }
 }
 
@@ -74,8 +77,10 @@ export const taskApi = {
     return request.post(`/api/agent/task/${taskId}/cancel`)
   },
   deployToSandbox(taskId) {
-    // 部署到 E2B 沙箱（npm install + vite dev，耗时约 1-3 分钟）
-    return request.post(`/api/agent/task/${taskId}/deploy`, {}, { timeout: 120000 })
+    return request.post(`/api/agent/task/${taskId}/deploy`, {}, { timeout: 300000 })
+  },
+  killSandbox(taskId) {
+    return request.post(`/api/agent/task/${taskId}/kill-sandbox`)
   }
 }
 

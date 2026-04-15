@@ -1,6 +1,7 @@
 package top.whyh.agentai.coordinator;
 
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -59,6 +60,7 @@ public class AgentOrchestrator {
     private final FileBlockParser fileBlockParser;
     private final AgentRegistry agentRegistry;
     private final WorkflowService workflowService;
+    private final ObjectMapper objectMapper;
 
     /** 用户主动取消任务时抛出的专用异常 */
     static class TaskCancelledException extends RuntimeException {
@@ -101,23 +103,25 @@ public class AgentOrchestrator {
             // ── 需求分析 ──
             if (progressListener != null) progressListener.accept("正在生成 PRD 文档...");
             workflowService.updateCurrentStep(workflowId, "需求分析");
+            String reqAgentId = agentRegistry.getAgentIdByCode(AgentDefinition.REQUIREMENT_ANALYSIS.getAgentCode());
             long prdStart = System.currentTimeMillis();
             RequirementResult prdResult = requirementService.generateRequirementDocument(userInput);
             long prdCost = System.currentTimeMillis() - prdStart;
             log.info("PRD文档生成完成 | requestId: {} | 耗时: {}ms", requestId, prdCost);
-            workflowService.recordStep(workflowId, "需求分析", "生成 PRD 需求文档",
+            workflowService.recordStep(workflowId, reqAgentId, "需求分析", "生成 PRD 需求文档",
                     prdResult.getDocumentContent(), prdCost, "completed");
             checkCancellation(cancelCheck, progressListener, requestId);
 
             // ── 架构设计 ──
             if (progressListener != null) progressListener.accept("正在生成架构文档...");
             workflowService.updateCurrentStep(workflowId, "架构设计");
+            String archAgentId = agentRegistry.getAgentIdByCode(AgentDefinition.ARCHITECT_DESIGN.getAgentCode());
             long archStart = System.currentTimeMillis();
             ArchitectResult archResult = architectService.generateArchitectDocument(
                     prdResult.getDocumentContent(), systemName);
             long archCost = System.currentTimeMillis() - archStart;
             log.info("架构文档生成完成 | requestId: {} | 耗时: {}ms", requestId, archCost);
-            workflowService.recordStep(workflowId, "架构设计", "生成系统架构文档",
+            workflowService.recordStep(workflowId, archAgentId, "架构设计", "生成系统架构文档",
                     archResult.getDocumentContent(), archCost, "completed");
             checkCancellation(cancelCheck, progressListener, requestId);
 
@@ -127,11 +131,12 @@ public class AgentOrchestrator {
             if (agentRegistry.canExecute(AgentDefinition.BACKEND_SKELETON, enabledCodes)) {
                 if (progressListener != null) progressListener.accept("正在生成后端项目骨架...");
                 workflowService.updateCurrentStep(workflowId, "后端骨架生成");
+                String agentId = agentRegistry.getAgentIdByCode(AgentDefinition.BACKEND_SKELETON.getAgentCode());
                 long t0 = System.currentTimeMillis();
                 Map<String, String> added = backendSkeletonGenerator.generateBackendSkeleton(
                         systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
                 projectFiles.putAll(added);
-                workflowService.recordStep(workflowId, "后端骨架生成", "生成 Spring Boot 项目骨架",
+                workflowService.recordStep(workflowId, agentId, "后端骨架生成", "生成 Spring Boot 项目骨架",
                         "生成文件数：" + added.size() + "\n" + String.join("\n", added.keySet()),
                         System.currentTimeMillis() - t0, "completed");
                 checkCancellation(cancelCheck, progressListener, requestId);
@@ -140,11 +145,12 @@ public class AgentOrchestrator {
             if (agentRegistry.canExecute(AgentDefinition.BACKEND_CONTROLLER, enabledCodes)) {
                 if (progressListener != null) progressListener.accept("正在生成后端接口 (Controller)...");
                 workflowService.updateCurrentStep(workflowId, "Controller 生成");
+                String agentId = agentRegistry.getAgentIdByCode(AgentDefinition.BACKEND_CONTROLLER.getAgentCode());
                 long t0 = System.currentTimeMillis();
                 Map<String, String> added = backendControllerGenerator.generateBackendControllers(
                         systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
                 projectFiles.putAll(added);
-                workflowService.recordStep(workflowId, "Controller 生成", "生成 RESTful Controller 层",
+                workflowService.recordStep(workflowId, agentId, "Controller 生成", "生成 RESTful Controller 层",
                         "生成文件数：" + added.size() + "\n" + String.join("\n", added.keySet()),
                         System.currentTimeMillis() - t0, "completed");
                 checkCancellation(cancelCheck, progressListener, requestId);
@@ -153,11 +159,12 @@ public class AgentOrchestrator {
             if (agentRegistry.canExecute(AgentDefinition.BACKEND_DOMAIN, enabledCodes)) {
                 if (progressListener != null) progressListener.accept("正在生成后端领域层 (Service/Entity/DTO)...");
                 workflowService.updateCurrentStep(workflowId, "领域层生成");
+                String agentId = agentRegistry.getAgentIdByCode(AgentDefinition.BACKEND_DOMAIN.getAgentCode());
                 long t0 = System.currentTimeMillis();
                 Map<String, String> added = backendDomainGenerator.generateBackendDomainLayer(
                         systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
                 projectFiles.putAll(added);
-                workflowService.recordStep(workflowId, "领域层生成", "生成 Service / Entity / DTO 层",
+                workflowService.recordStep(workflowId, agentId, "领域层生成", "生成 Service / Entity / DTO 层",
                         "生成文件数：" + added.size() + "\n" + String.join("\n", added.keySet()),
                         System.currentTimeMillis() - t0, "completed");
                 checkCancellation(cancelCheck, progressListener, requestId);
@@ -166,11 +173,12 @@ public class AgentOrchestrator {
             if (agentRegistry.canExecute(AgentDefinition.FRONTEND_SKELETON, enabledCodes)) {
                 if (progressListener != null) progressListener.accept("正在生成前端项目骨架...");
                 workflowService.updateCurrentStep(workflowId, "前端骨架生成");
+                String agentId = agentRegistry.getAgentIdByCode(AgentDefinition.FRONTEND_SKELETON.getAgentCode());
                 long t0 = System.currentTimeMillis();
                 Map<String, String> added = frontendSkeletonGenerator.generateFrontendSkeleton(
                         systemName, prdResult.getDocumentContent(), archResult.getDocumentContent());
                 projectFiles.putAll(added);
-                workflowService.recordStep(workflowId, "前端骨架生成", "生成 Vue3 + Vite 项目骨架",
+                workflowService.recordStep(workflowId, agentId, "前端骨架生成", "生成 Vue3 + Vite 项目骨架",
                         "生成文件数：" + added.size() + "\n" + String.join("\n", added.keySet()),
                         System.currentTimeMillis() - t0, "completed");
                 checkCancellation(cancelCheck, progressListener, requestId);
@@ -179,11 +187,12 @@ public class AgentOrchestrator {
             if (agentRegistry.canExecute(AgentDefinition.FRONTEND_VIEWS, enabledCodes)) {
                 if (progressListener != null) progressListener.accept("正在生成前端页面 (Views)...");
                 workflowService.updateCurrentStep(workflowId, "前端页面生成");
+                String agentId = agentRegistry.getAgentIdByCode(AgentDefinition.FRONTEND_VIEWS.getAgentCode());
                 long t0 = System.currentTimeMillis();
                 Map<String, String> added = frontendViewsGenerator.generateFrontendViews(
                         systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles);
                 projectFiles.putAll(added);
-                workflowService.recordStep(workflowId, "前端页面生成", "生成 Vue3 Views 页面",
+                workflowService.recordStep(workflowId, agentId, "前端页面生成", "生成 Vue3 Views 页面",
                         "生成文件数：" + added.size() + "\n" + String.join("\n", added.keySet()),
                         System.currentTimeMillis() - t0, "completed");
                 checkCancellation(cancelCheck, progressListener, requestId);
@@ -192,11 +201,12 @@ public class AgentOrchestrator {
             if (agentRegistry.canExecute(AgentDefinition.FRONTEND_API, enabledCodes)) {
                 if (progressListener != null) progressListener.accept("正在封装前端 API 接口...");
                 workflowService.updateCurrentStep(workflowId, "前端 API 封装");
+                String agentId = agentRegistry.getAgentIdByCode(AgentDefinition.FRONTEND_API.getAgentCode());
                 long t0 = System.currentTimeMillis();
                 Map<String, String> added = frontendApiGenerator.generateFrontendApiUtils(
                         systemName, prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFiles);
                 projectFiles.putAll(added);
-                workflowService.recordStep(workflowId, "前端 API 封装", "封装 Axios 接口层",
+                workflowService.recordStep(workflowId, agentId, "前端 API 封装", "封装 Axios 接口层",
                         "生成文件数：" + added.size() + "\n" + String.join("\n", added.keySet()),
                         System.currentTimeMillis() - t0, "completed");
                 checkCancellation(cancelCheck, progressListener, requestId);
@@ -204,11 +214,15 @@ public class AgentOrchestrator {
 
             log.info("项目代码合并完成 | requestId: {} | 文件总数: {}", requestId, projectFiles.size());
 
+            // ── 沙箱部署保障（第一道防线：审查前强制写入正确配置） ──
+            enforceDeploymentRequirements(projectFiles, systemName);
+
             // ── 代码审查与修复循环 ──
             String reviewWarning = "";
             if (agentRegistry.canExecute(AgentDefinition.CODE_REVIEW, enabledCodes)) {
                 int attempt = 0;
                 CodeReviewReport lastReport = null;
+                String reviewAgentId = agentRegistry.getAgentIdByCode(AgentDefinition.CODE_REVIEW.getAgentCode());
                 while (attempt < MAX_FIX_RETRIES) {
                     if (progressListener != null) progressListener.accept(
                             String.format("正在进行代码审查 (第%d/%d轮)...", attempt + 1, MAX_FIX_RETRIES));
@@ -224,7 +238,7 @@ public class AgentOrchestrator {
                     if (!report.needsFix()) {
                         log.info("代码审查通过 | requestId: {} | 轮次: {}", requestId, attempt + 1);
                         if (progressListener != null) progressListener.accept("代码审查通过，项目质量达标。");
-                        workflowService.recordStep(workflowId, "代码审查", "自动代码质量检查",
+                        workflowService.recordStep(workflowId, reviewAgentId, "代码审查", "自动代码质量检查",
                                 buildReviewStepOutput(report, criticalIssues, warningIssues),
                                 System.currentTimeMillis() - t0, "completed");
                         // 收集 WARNING 给用户展示
@@ -253,7 +267,7 @@ public class AgentOrchestrator {
                                 archResult.getDocumentContent(), projectFiles, criticalIssues, attempt + 1));
                     }
 
-                    workflowService.recordStep(workflowId, "代码审查（修复）",
+                    workflowService.recordStep(workflowId, reviewAgentId, "代码审查（修复）",
                             String.format("第 %d 轮审查修复（致命:%d，警告:%d，缺失文件:%d）",
                                     attempt + 1, criticalIssues.size(), warningIssues.size(), report.getMissingFiles().size()),
                             buildReviewStepOutput(report, criticalIssues, warningIssues),
@@ -287,6 +301,9 @@ public class AgentOrchestrator {
                 log.info("代码审查智能体未启用，跳过审查步骤");
             }
 
+            // ── 沙箱部署保障（第二道防线：审查后再次强制确保配置正确） ──
+            enforceDeploymentRequirements(projectFiles, systemName);
+
             if (progressListener != null) progressListener.accept("正在校验项目完整性...");
             workflowService.updateCurrentStep(workflowId, "完整性校验");
             validateProjectIntegrity(projectFiles, systemName, enabledCodes);
@@ -296,17 +313,46 @@ public class AgentOrchestrator {
                     requestId, totalCost, projectFiles.size());
             if (progressListener != null) progressListener.accept("项目生成完成，请在预览页面确认后保存。");
 
-            return new SystemGenerateResult(requestId, systemName,
-                    prdResult.getDocumentId(), prdResult.getStoragePath(),
-                    archResult.getDocumentId(), archResult.getStoragePath(),
-                    prdResult.getDocumentContent(), archResult.getDocumentContent(),
-                    projectFiles, workflowId, "success", reviewWarning, totalCost);
+            SystemGenerateResult finalResult = SystemGenerateResult.builder()
+                    .requestId(requestId)
+                    .systemName(systemName)
+                    .prdDocumentId(prdResult.getDocumentId())
+                    .prdStoragePath(prdResult.getStoragePath())
+                    .archDocumentId(archResult.getDocumentId())
+                    .archStoragePath(archResult.getStoragePath())
+                    .prdContent(prdResult.getDocumentContent())
+                    .archContent(archResult.getDocumentContent())
+                    .projectFiles(projectFiles)
+                    .workflowId(workflowId)
+                    .status("success")
+                    .errorMsg(reviewWarning)
+                    .totalCostMs(totalCost)
+                    .build();
+
+            // 保存最终结果到数据库，供后续预览
+            workflowService.saveResult(workflowId, finalResult);
+
+            // ★ 持久化产物到 artifact 表，支持历史下载和预览
+            try {
+                String projectFilesJson = objectMapper.writeValueAsString(projectFiles);
+                workflowService.persistArtifacts(requestId, workflowId, systemName,
+                        prdResult.getDocumentContent(), archResult.getDocumentContent(), projectFilesJson);
+            } catch (Exception e) {
+                log.warn("持久化项目文件到 Artifact 表失败 | requestId: {} | err: {}", requestId, e.getMessage());
+            }
+
+            return finalResult;
 
         } catch (TaskCancelledException e) {
             long totalCost = System.currentTimeMillis() - startTime;
             log.info("任务已取消 | requestId: {} | 耗时: {}ms", requestId, totalCost);
-            return new SystemGenerateResult(requestId, "", "", "", "", "",
-                    null, null, null, workflowId, "cancelled", e.getMessage(), totalCost);
+            return SystemGenerateResult.builder()
+                    .requestId(requestId)
+                    .workflowId(workflowId)
+                    .status("cancelled")
+                    .errorMsg(e.getMessage())
+                    .totalCostMs(totalCost)
+                    .build();
         } catch (IllegalStateException e) {
             long totalCost = System.currentTimeMillis() - startTime;
             log.error("智能体配置错误 | requestId: {} | 错误: {}", requestId, e.getMessage());
@@ -327,8 +373,13 @@ public class AgentOrchestrator {
     }
 
     private SystemGenerateResult buildFailResult(String requestId, String workflowId, String errorMsg, long totalCost) {
-        return new SystemGenerateResult(requestId, "", "", "", "", "",
-                null, null, null, workflowId, "fail", errorMsg, totalCost);
+        return SystemGenerateResult.builder()
+                .requestId(requestId)
+                .workflowId(workflowId)
+                .status("fail")
+                .errorMsg(errorMsg)
+                .totalCostMs(totalCost)
+                .build();
     }
 
     /** 检查取消标志，若已取消则抛出 TaskCancelledException 中止流程 */
@@ -417,6 +468,120 @@ public class AgentOrchestrator {
         return fileBlockParser.parse(raw);
     }
 
+    /**
+     * 沙箱部署保障：强制覆写前端配置，确保 E2B 沙箱能正确运行项目。
+     * 无论 LLM 生成了什么内容，此方法最终保证：
+     * 1. vite.config.js — 正确的 host/port/allowedHosts/proxy
+     * 2. package.json  — 正确的 scripts 和必要依赖
+     * 3. index.html    — 存在且包含 id="app" 挂载点
+     */
+    @SuppressWarnings("unchecked")
+    private void enforceDeploymentRequirements(Map<String, String> projectFiles, String systemName) {
+        // 1. 强制覆写 vite.config.js
+        // allowedHosts 必须是布尔值 true，而非字符串 'all'。
+        // Vite 5.4+ 的类型定义为 string[] | true，字符串 'all' 不会被识别为"允许全部"，
+        // 只有 true 才能完全禁用主机检查，使 E2B 沙箱域名（*.e2b.dev）得以访问。
+        String viteConfig = "import { defineConfig } from 'vite'\n"
+                + "import vue from '@vitejs/plugin-vue'\n\n"
+                + "export default defineConfig({\n"
+                + "  plugins: [vue()],\n"
+                + "  server: {\n"
+                + "    host: '0.0.0.0',\n"
+                + "    port: 5173,\n"
+                + "    allowedHosts: true,\n"
+                + "    proxy: {\n"
+                + "      '/api': {\n"
+                + "        target: 'http://localhost:8080',\n"
+                + "        changeOrigin: true\n"
+                + "      }\n"
+                + "    }\n"
+                + "  }\n"
+                + "})\n";
+        projectFiles.put("frontend/vite.config.js", viteConfig);
+
+        // 2. 修补 package.json：保留 LLM 生成的内容，仅强制覆盖关键字段
+        String pkgKey = "frontend/package.json";
+        try {
+            Map<String, Object> pkg;
+            if (projectFiles.containsKey(pkgKey)) {
+                pkg = objectMapper.readValue(projectFiles.get(pkgKey),
+                        new com.fasterxml.jackson.core.type.TypeReference<java.util.LinkedHashMap<String, Object>>() {});
+            } else {
+                pkg = new java.util.LinkedHashMap<>();
+            }
+            pkg.putIfAbsent("name", systemName.toLowerCase().replaceAll("[^a-z0-9]", "-"));
+            pkg.putIfAbsent("version", "0.0.1");
+            pkg.put("type", "module");  // ESModule，Vite 要求
+
+            // scripts 必须完整
+            Map<String, Object> scripts = (Map<String, Object>) pkg.computeIfAbsent(
+                    "scripts", k -> new java.util.LinkedHashMap<>());
+            scripts.put("dev", "vite");
+            scripts.put("build", "vite build");
+            scripts.put("preview", "vite preview");
+
+            // dependencies：仅补充缺失，不覆盖 LLM 写的版本
+            Map<String, Object> deps = (Map<String, Object>) pkg.computeIfAbsent(
+                    "dependencies", k -> new java.util.LinkedHashMap<>());
+            deps.putIfAbsent("vue", "^3.4.0");
+            deps.putIfAbsent("vue-router", "^4.3.0");
+            deps.putIfAbsent("pinia", "^2.1.0");
+            deps.putIfAbsent("axios", "^1.6.0");
+            deps.putIfAbsent("element-plus", "^2.7.0");
+
+            // devDependencies：vite 和 plugin-vue 必须存在
+            Map<String, Object> devDeps = (Map<String, Object>) pkg.computeIfAbsent(
+                    "devDependencies", k -> new java.util.LinkedHashMap<>());
+            devDeps.putIfAbsent("vite", "^5.2.0");
+            devDeps.putIfAbsent("@vitejs/plugin-vue", "^5.0.0");
+
+            projectFiles.put(pkgKey, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(pkg));
+        } catch (Exception e) {
+            log.warn("修补 package.json 失败，降级为强制覆写 | err: {}", e.getMessage());
+            String safeName = systemName.toLowerCase().replaceAll("[^a-z0-9]", "-");
+            projectFiles.put(pkgKey, "{\n"
+                    + "  \"name\": \"" + safeName + "\",\n"
+                    + "  \"version\": \"0.0.1\",\n"
+                    + "  \"type\": \"module\",\n"
+                    + "  \"scripts\": {\n"
+                    + "    \"dev\": \"vite\",\n"
+                    + "    \"build\": \"vite build\",\n"
+                    + "    \"preview\": \"vite preview\"\n"
+                    + "  },\n"
+                    + "  \"dependencies\": {\n"
+                    + "    \"vue\": \"^3.4.0\",\n"
+                    + "    \"vue-router\": \"^4.3.0\",\n"
+                    + "    \"pinia\": \"^2.1.0\",\n"
+                    + "    \"axios\": \"^1.6.0\",\n"
+                    + "    \"element-plus\": \"^2.7.0\"\n"
+                    + "  },\n"
+                    + "  \"devDependencies\": {\n"
+                    + "    \"vite\": \"^5.2.0\",\n"
+                    + "    \"@vitejs/plugin-vue\": \"^5.0.0\"\n"
+                    + "  }\n"
+                    + "}\n");
+        }
+
+        // 3. 确保 index.html 存在，且包含正确的挂载点
+        if (!projectFiles.containsKey("frontend/index.html")) {
+            projectFiles.put("frontend/index.html", "<!DOCTYPE html>\n"
+                    + "<html lang=\"zh\">\n"
+                    + "  <head>\n"
+                    + "    <meta charset=\"UTF-8\" />\n"
+                    + "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+                    + "    <title>" + systemName + "</title>\n"
+                    + "  </head>\n"
+                    + "  <body>\n"
+                    + "    <div id=\"app\"></div>\n"
+                    + "    <script type=\"module\" src=\"/src/main.js\"></script>\n"
+                    + "  </body>\n"
+                    + "</html>\n");
+            log.info("已补全 frontend/index.html（沙箱部署保障）");
+        }
+
+        log.info("沙箱部署保障已执行 | 系统: {} | 已写入 vite.config.js / package.json / index.html", systemName);
+    }
+
     private void validateProjectIntegrity(Map<String, String> projectFiles, String systemName,
                                           Set<String> enabledCodes) throws GraphRunnerException {
         String basePackage = "com." + systemName.toLowerCase().replaceAll("[^a-z0-9]", "");
@@ -429,6 +594,23 @@ public class AgentOrchestrator {
             }
             if (!projectFiles.containsKey("frontend/src/App.vue")) {
                 throw new GraphRunnerException("前端骨架缺少必需文件: src/App.vue");
+            }
+            // 沙箱部署必需文件校验（enforceDeploymentRequirements 已保障，此处为最终安全网）
+            if (!projectFiles.containsKey("frontend/vite.config.js")) {
+                throw new GraphRunnerException("前端缺少沙箱部署必需文件: vite.config.js");
+            }
+            if (!projectFiles.containsKey("frontend/package.json")) {
+                throw new GraphRunnerException("前端缺少沙箱部署必需文件: package.json");
+            }
+            if (!projectFiles.containsKey("frontend/index.html")) {
+                throw new GraphRunnerException("前端缺少沙箱部署必需文件: index.html");
+            }
+            // 校验 vite.config.js 包含沙箱运行所需的关键配置
+            String viteConf = projectFiles.get("frontend/vite.config.js");
+            // 检查 allowedHosts: true（布尔值）和 host: '0.0.0.0' 是否存在
+            if (!viteConf.contains("allowedHosts: true") || !viteConf.contains("0.0.0.0")) {
+                log.warn("vite.config.js 缺少沙箱配置（需要 allowedHosts: true），将重新强制写入");
+                enforceDeploymentRequirements(projectFiles, systemName);
             }
         }
 

@@ -64,4 +64,17 @@ public class AgentRegistry {
             throw new IllegalStateException("架构设计智能体未启用，无法启动流程");
         }
     }
+
+    /**
+     * 根据 agentCode 获取数据库中的 agentId
+     * 注意：如果数据库中由于重复初始化存在多个相同 role 的记录，取最新的一条
+     */
+    public String getAgentIdByCode(String agentCode) {
+        Agent agent = agentMapper.selectOne(
+                new LambdaQueryWrapper<Agent>()
+                        .eq(Agent::getRole, agentCode)
+                        .last("LIMIT 1")
+        );
+        return agent != null ? agent.getId() : null;
+    }
 }

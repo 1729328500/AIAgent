@@ -7,6 +7,8 @@ import top.whyh.agentai.result.SystemGenerateResult;
 @Data
 public class GenerationTask {
     private String taskId;
+    /** 提交任务的用户 ID，用于 SSE 鉴权和工作流记录 */
+    private String userId;
     private String status; // "pending", "running", "success", "failed"
     private String message; // 进度描述或错误信息
     private SystemGenerateResult result; // 成功时填充

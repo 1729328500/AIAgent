@@ -23,6 +23,7 @@ public class WorkflowService {
     private final WorkflowInstanceMapper workflowInstanceMapper;
     private final WorkflowStepMapper workflowStepMapper;
     private final ArtifactMapper artifactMapper;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /** outputData 最大存储长度（LONGTEXT 实际可存 4GB，但此处限制合理值） */
     private static final int MAX_OUTPUT_LEN = 20000;
@@ -33,9 +34,22 @@ public class WorkflowService {
         return workflowInstanceMapper.selectById(id);
     }
 
+    public WorkflowInstance getWorkflowByTaskId(String taskId) {
+        LambdaQueryWrapper<WorkflowInstance> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WorkflowInstance::getTaskId, taskId)
+               .last("LIMIT 1");
+        return workflowInstanceMapper.selectOne(wrapper);
+    }
+
     public Page<WorkflowInstance> getWorkflowsByPage(int pageNum, int pageSize, String userId, String status) {
         Page<WorkflowInstance> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<WorkflowInstance> wrapper = new LambdaQueryWrapper<>();
+        // 只返回当前用户的工作流；未登录时 userId 为 null，返回空
+        if (userId != null && !userId.isEmpty()) {
+            wrapper.eq(WorkflowInstance::getUserId, userId);
+        } else {
+            wrapper.eq(WorkflowInstance::getUserId, ""); // 未认证：确保返回空
+        }
         if (status != null && !status.isEmpty()) {
             wrapper.eq(WorkflowInstance::getStatus, status);
         }
@@ -51,7 +65,43 @@ public class WorkflowService {
     }
 
     public List<Artifact> getWorkflowArtifacts(String workflowInstanceId) {
-        return List.of(); // 暂未启用 Artifact 表
+        LambdaQueryWrapper<Artifact> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Artifact::getWorkflowId, workflowInstanceId);
+        wrapper.orderByAsc(Artifact::getCreatedTime);
+        return artifactMapper.selectList(wrapper);
+    }
+
+    /**
+     * 将生成过程中的关键产物持久化到 artifact 表。
+     */
+    public void persistArtifacts(String taskId, String workflowId, String systemName,
+                                 String prdContent, String archContent, String projectFilesJson) {
+        if (workflowId == null) return;
+        try {
+            // 1. 保存 PRD
+            saveArtifact(taskId, workflowId, "document", systemName + " - 需求分析文档 (PRD)", prdContent);
+            // 2. 保存架构设计
+            saveArtifact(taskId, workflowId, "document", systemName + " - 系统架构设计", archContent);
+            // 3. 保存完整项目代码 (JSON 格式)
+            saveArtifact(taskId, workflowId, "code", systemName + " - 完整项目源码", projectFilesJson);
+        } catch (Exception e) {
+            log.warn("持久化产物失败 | workflowId: {} | err: {}", workflowId, e.getMessage());
+        }
+    }
+
+    private void saveArtifact(String taskId, String workflowId, String type, String name, String content) {
+        if (content == null) return;
+        Artifact artifact = new Artifact();
+        artifact.setTaskId(taskId);
+        artifact.setWorkflowId(workflowId);
+        artifact.setArtifactType(type);
+        artifact.setName(name);
+        artifact.setContent(content);
+        artifact.setFileSize((long) content.length());
+        artifact.setStatus("valid");
+        artifact.setCreatedTime(LocalDateTime.now());
+        artifact.setUpdatedTime(LocalDateTime.now());
+        artifactMapper.insert(artifact);
     }
 
     // ─────────────── 写方法 ───────────────
@@ -60,9 +110,10 @@ public class WorkflowService {
      * 在任务启动时创建 WorkflowInstance，返回其 id（workflowId）。
      * workflowName 初始为占位符，由 updateWorkflowName() 在执行完成后更新。
      */
-    public String createWorkflow(String taskId, String workflowName) {
+    public String createWorkflow(String taskId, String workflowName, String userId) {
         WorkflowInstance wf = new WorkflowInstance();
         wf.setTaskId(taskId);
+        wf.setUserId(userId);
         wf.setWorkflowName(workflowName);
         wf.setWorkflowType("FULL_GENERATE");
         wf.setStatus("running");
@@ -70,7 +121,7 @@ public class WorkflowService {
         wf.setCreatedTime(LocalDateTime.now());
         wf.setUpdatedTime(LocalDateTime.now());
         workflowInstanceMapper.insert(wf);
-        log.info("创建工作流记录 | workflowId: {} | taskId: {}", wf.getId(), taskId);
+        log.info("创建工作流记录 | workflowId: {} | taskId: {} | userId: {}", wf.getId(), taskId, userId);
         return wf.getId();
     }
 
@@ -78,12 +129,13 @@ public class WorkflowService {
      * 智能体步骤完成后，向 workflow_step 表写入一条记录。
      * outputData 超过 MAX_OUTPUT_LEN 时自动截断。
      */
-    public void recordStep(String workflowId, String stepName, String description,
+    public void recordStep(String workflowId, String agentId, String stepName, String description,
                            String outputData, long durationMs, String status) {
         if (workflowId == null) return;
         try {
             WorkflowStep step = new WorkflowStep();
             step.setWorkflowId(workflowId);
+            step.setAgentId(agentId);
             step.setStepName(stepName);
             step.setStepDescription(description);
             String truncated = outputData != null && outputData.length() > MAX_OUTPUT_LEN
@@ -100,6 +152,12 @@ public class WorkflowService {
         } catch (Exception e) {
             log.warn("记录工作流步骤失败（不影响主流程）| workflowId: {} | step: {} | err: {}", workflowId, stepName, e.getMessage());
         }
+    }
+
+    /** 过载方法，兼容旧调用 */
+    public void recordStep(String workflowId, String stepName, String description,
+                           String outputData, long durationMs, String status) {
+        recordStep(workflowId, null, stepName, description, outputData, durationMs, status);
     }
 
     /** 更新 workflow_instance 当前正在执行的步骤名（供列表页实时展示） */
@@ -132,6 +190,21 @@ public class WorkflowService {
         }
     }
 
+    /** 保存全流程生成的最终结果到数据库 */
+    public void saveResult(String workflowId, Object result) {
+        if (workflowId == null || result == null) return;
+        try {
+            WorkflowInstance wf = workflowInstanceMapper.selectById(workflowId);
+            if (wf != null) {
+                wf.setResultJson(objectMapper.writeValueAsString(result));
+                wf.setUpdatedTime(LocalDateTime.now());
+                workflowInstanceMapper.updateById(wf);
+            }
+        } catch (Exception e) {
+            log.warn("保存工作流结果失败 | workflowId: {} | err: {}", workflowId, e.getMessage());
+        }
+    }
+
     /**
      * 将工作流推入终态（completed / failed / cancelled）。
      */
@@ -152,6 +225,24 @@ public class WorkflowService {
         }
     }
 
+    /** 更新工作流的沙箱部署状态 */
+    public void updateSandboxStatus(String workflowId, String status, String sandboxId, String sandboxUrl, String sandboxError) {
+        if (workflowId == null) return;
+        try {
+            WorkflowInstance wf = workflowInstanceMapper.selectById(workflowId);
+            if (wf != null) {
+                wf.setSandboxStatus(status);
+                wf.setSandboxId(sandboxId);
+                wf.setSandboxUrl(sandboxUrl);
+                wf.setSandboxError(sandboxError);
+                wf.setUpdatedTime(LocalDateTime.now());
+                workflowInstanceMapper.updateById(wf);
+            }
+        } catch (Exception e) {
+            log.warn("更新沙箱状态失败 | workflowId: {} | err: {}", workflowId, e.getMessage());
+        }
+    }
+
     // ─────────────── 取消（前端操作） ───────────────
 
     public void cancelWorkflow(String workflowInstanceId) {
@@ -164,5 +255,26 @@ public class WorkflowService {
         workflow.setEndTime(LocalDateTime.now());
         workflow.setUpdatedTime(LocalDateTime.now());
         workflowInstanceMapper.updateById(workflow);
+    }
+
+    /**
+     * 删除工作流记录及关联的所有步骤和产物。
+     */
+    public void deleteWorkflow(String workflowId) {
+        WorkflowInstance workflow = workflowInstanceMapper.selectById(workflowId);
+        if (workflow == null) return;
+
+        // 1. 删除关联的步骤
+        workflowStepMapper.delete(new LambdaQueryWrapper<WorkflowStep>()
+                .eq(WorkflowStep::getWorkflowId, workflowId));
+
+        // 2. 删除关联的产物
+        artifactMapper.delete(new LambdaQueryWrapper<Artifact>()
+                .eq(Artifact::getWorkflowId, workflowId));
+
+        // 3. 删除工作流实例本身
+        workflowInstanceMapper.deleteById(workflowId);
+        
+        log.info("已删除工作流记录及其关联数据 | workflowId: {}", workflowId);
     }
 }

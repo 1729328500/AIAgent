@@ -3,11 +3,11 @@
     <el-aside :width="isCollapse ? '64px' : '260px'" class="aside-menu">
       <div class="logo-container" @click="router.push('/dashboard')">
         <div class="logo-icon">
-          <el-icon :size="24" color="#fff"><Cpu /></el-icon>
+          <el-icon :size="24" color="#388ddeff"><Cpu /></el-icon>
         </div>
-        <h2 v-if="!isCollapse" class="logo-text">AgentAi Studio</h2>
+        <h2 v-if="!isCollapse" class="logo-text">智能体开发平台</h2>
       </div>
-      
+
       <el-menu
         :default-active="$route.path"
         class="el-menu-vertical"
@@ -52,7 +52,7 @@
             <el-breadcrumb-item>{{ currentRouteName }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
-        
+
         <div class="header-right">
           <el-tooltip content="通知" placement="bottom">
             <el-badge is-dot class="notice-badge">
@@ -62,7 +62,13 @@
 
           <el-dropdown @command="handleCommand" trigger="click">
             <div class="user-profile">
-              <el-avatar :size="32" :src="userStore.userInfo.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix'" />
+              <el-avatar
+                :size="32"
+                :src="
+                  userStore.userInfo.avatar ||
+                  'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix'
+                "
+              />
               <span class="username">{{ userStore.userInfo.username }}</span>
               <el-icon><ArrowDown /></el-icon>
             </div>
@@ -92,46 +98,55 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { 
-  Monitor, Coordinate, Operation, Memo, Cpu, 
-  Bell, ArrowDown, User, SwitchButton, Fold, Expand 
-} from '@element-plus/icons-vue'
-import { useUserStore } from '../stores/user'
-import { authApi } from '../api'
+import { ref, computed } from "vue";
+import { useRouter, useRoute } from "vue-router";
+import { ElMessage } from "element-plus";
+import {
+  Monitor,
+  Coordinate,
+  Operation,
+  Memo,
+  Cpu,
+  Bell,
+  ArrowDown,
+  User,
+  SwitchButton,
+  Fold,
+  Expand,
+} from "@element-plus/icons-vue";
+import { useUserStore } from "../stores/user";
+import { authApi } from "../api";
 
-const router = useRouter()
-const route = useRoute()
-const userStore = useUserStore()
-const isCollapse = ref(false)
+const router = useRouter();
+const route = useRoute();
+const userStore = useUserStore();
+const isCollapse = ref(false);
 
 const currentRouteName = computed(() => {
   const nameMap = {
-    '/dashboard': '工作台',
-    '/agents': '智能体枢纽',
-    '/workflows': '构建记录',
-    '/logs': '运行日志',
-    '/profile': '个人中心'
-  }
-  return nameMap[route.path] || '页面'
-})
+    "/dashboard": "工作台",
+    "/agents": "智能体枢纽",
+    "/workflows": "构建记录",
+    "/logs": "运行日志",
+    "/profile": "个人中心",
+  };
+  return nameMap[route.path] || "页面";
+});
 
 const handleCommand = async (command) => {
-  if (command === 'logout') {
+  if (command === "logout") {
     try {
-      await authApi.logout()
+      await authApi.logout();
     } catch (error) {
-      console.error(error)
+      console.error(error);
     }
-    userStore.logout()
-    ElMessage.success('已安全退出')
-    router.push('/login')
-  } else if (command === 'profile') {
-    router.push('/profile')
+    userStore.logout();
+    ElMessage.success("已安全退出");
+    router.push("/login");
+  } else if (command === "profile") {
+    router.push("/profile");
   }
-}
+};
 </script>
 
 <style scoped>

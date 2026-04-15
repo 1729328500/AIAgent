@@ -33,16 +33,22 @@
           :disabled="deploying"
         >
           <el-icon class="el-icon--left"><Monitor /></el-icon>
-          {{ deploying ? '部署中...' : '部署到沙箱预览' }}
+          {{ deploying ? '部署中...' : (task?.sandboxStatus === 'failed' ? '重新部署' : '部署到沙箱预览') }}
         </el-button>
-        <el-button
-          v-if="task?.sandboxStatus === 'running' && task?.sandboxUrl"
-          type="success"
-          @click="openSandbox"
-        >
-          <el-icon class="el-icon--left"><Link /></el-icon>
-          打开沙箱预览
-        </el-button>
+        <template v-if="task?.sandboxStatus === 'running' && task?.sandboxUrl">
+          <el-button type="success" @click="openSandbox">
+            <el-icon class="el-icon--left"><Link /></el-icon>
+            打开沙箱预览
+          </el-button>
+          <el-button type="danger" plain :loading="killing" @click="handleKill">
+            <el-icon class="el-icon--left"><SwitchButton /></el-icon>
+            关闭沙箱
+          </el-button>
+          <el-button type="warning" plain :loading="deploying" @click="handleRedeploy" :disabled="killing">
+            <el-icon class="el-icon--left"><Monitor /></el-icon>
+            重新部署
+          </el-button>
+        </template>
       </div>
     </div>
 
@@ -53,6 +59,11 @@
 
     <!-- Error -->
     <el-alert v-else-if="error" :title="error" type="error" show-icon :closable="false" />
+
+    <!-- Not Found -->
+    <el-empty v-else-if="!task" description="任务不存在或已过期">
+      <el-button type="primary" @click="$router.push('/dashboard')">返回工作台</el-button>
+    </el-empty>
 
     <!-- Main Content -->
     <div v-else-if="task" class="preview-body">
@@ -209,10 +220,10 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Back, Download, FolderOpened, Folder,
-  Document, CopyDocument, Monitor, Link
+  Document, CopyDocument, Monitor, Link, SwitchButton
 } from '@element-plus/icons-vue'
 import { taskApi } from '../api'
 import MarkdownIt from 'markdown-it'
@@ -223,6 +234,7 @@ const router = useRouter()
 const loading = ref(true)
 const saving = ref(false)
 const deploying = ref(false)
+const killing = ref(false)
 const error = ref('')
 const task = ref(null)
 const activeFile = ref('')
@@ -387,6 +399,43 @@ const handleSave = async () => {
     ElMessage.error('保存失败: ' + (e.response?.data?.error || e.message))
   } finally {
     saving.value = false
+  }
+}
+
+const handleRedeploy = async () => {
+  // 先关闭旧沙箱，再重新部署
+  killing.value = true
+  try {
+    await taskApi.killSandbox(route.params.taskId)
+    if (task.value) { task.value.sandboxStatus = 'none'; task.value.sandboxId = null; task.value.sandboxUrl = null }
+  } catch (e) {
+    console.warn('关闭旧沙箱失败，继续重新部署:', e.message)
+  } finally {
+    killing.value = false
+  }
+  await handleDeploy()
+}
+
+const handleKill = async () => {
+  try {
+    await ElMessageBox.confirm('确定要关闭当前沙箱吗？关闭后预览链接将失效。', '关闭沙箱', {
+      confirmButtonText: '关闭', cancelButtonText: '取消', type: 'warning'
+    })
+  } catch { return }
+
+  killing.value = true
+  try {
+    await taskApi.killSandbox(route.params.taskId)
+    if (task.value) {
+      task.value.sandboxStatus = 'none'
+      task.value.sandboxId = null
+      task.value.sandboxUrl = null
+    }
+    ElMessage.success('沙箱已关闭')
+  } catch (e) {
+    ElMessage.error('关闭失败: ' + (e.response?.data?.message || e.message))
+  } finally {
+    killing.value = false
   }
 }
 

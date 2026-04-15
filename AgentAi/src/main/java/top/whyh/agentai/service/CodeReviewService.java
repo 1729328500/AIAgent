@@ -83,7 +83,8 @@ public class CodeReviewService {
              + "2. **接口契合度**：严格比对前端 src/api/*.js 中的 axios 调用路径与后端 @RestController 中的 @RequestMapping 路径。路径、方法（GET/POST）、参数名不一致，标记为 INCONSISTENCY。\n"
              + "3. **引用闭环**：检查代码中的 import 或 require。如果引用的文件在已生成文件列表中不存在，标记为 MISSING_FILE。\n"
              + "4. **结构合规性**：确保所有文件都在 backend/ 或 frontend/ 下，且 Java 包名符合规范。\n"
-             + "5. **拒绝幻觉**：如果某个功能在 PRD 中有但在代码中完全没实现，必须指出缺失的文件。\n\n"
+             + "5. **拒绝幻觉**：如果某个功能在 PRD 中有但在代码中完全没实现，必须指出缺失的文件。\n"
+             + "6. **沙箱部署可行性**：检查 frontend/vite.config.js 是否包含 host: '0.0.0.0'、allowedHosts 和 proxy /api 配置；检查 frontend/package.json 的 scripts.dev 是否为 \"vite\"、是否包含 vue / vue-router / axios 等必要依赖以及 vite / @vitejs/plugin-vue 开发依赖；如有缺失，标记为 CRITICAL。\n\n"
              + "### 严重性分级（severity 字段，必填）：\n"
              + "- CRITICAL（致命问题）：会导致项目无法编译或无法运行。例如：\n"
              + "  缺少必要文件（Controller、Service、主入口等），import 引用了不存在的文件，包名/路径错误导致编译失败，前后端接口路径完全不匹配（404 必现）。\n"
@@ -132,7 +133,8 @@ public class CodeReviewService {
                         || e.getKey().contains("axios.js")
                         || e.getKey().contains("Application.java")
                         || e.getKey().contains("pom.xml")
-                        || e.getKey().contains("package.json"))
+                        || e.getKey().contains("package.json")
+                        || e.getKey().contains("vite.config.js"))
                 .limit(30)
                 .forEach(e -> prompt.append("--- 文件: ").append(e.getKey()).append(" ---\n")
                         .append(e.getValue()).append("\n\n"));
@@ -143,6 +145,8 @@ public class CodeReviewService {
         prompt.append("3. 检查所有 import 语句引用的类是否都存在于文件列表中\n");
         prompt.append("4. 检查包名是否统一且符合规范\n");
         prompt.append("5. 检查是否缺少关键配置文件（如 SecurityConfig、CorsConfig）\n");
+        prompt.append("6. 检查 frontend/vite.config.js 是否含有 host: '0.0.0.0'、allowedHosts 及 proxy /api 配置\n");
+        prompt.append("7. 检查 frontend/package.json 的 scripts.dev 是否为 \"vite\"，是否包含必要依赖（vue、vue-router、axios、vite）\n");
         prompt.append("\n请基于以上完整上下文，进行深度审查并区分 CRITICAL 和 WARNING 问题。");
 
         return prompt.toString();

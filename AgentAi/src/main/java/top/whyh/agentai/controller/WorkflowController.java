@@ -48,4 +48,10 @@ public class WorkflowController {
         workflowService.cancelWorkflow(id);
         return Result.success();
     }
+
+    @DeleteMapping("/{id}")
+    public Result<Void> deleteWorkflow(@PathVariable String id) {
+        workflowService.deleteWorkflow(id);
+        return Result.success();
+    }
 }

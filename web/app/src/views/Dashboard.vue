@@ -87,13 +87,16 @@
               </el-tag>
               <!-- 取消按钮：仅在任务进行中时显示 -->
               <el-button
-                v-if="taskId && (result?.status === 'pending' || result?.status === 'running')"
+                v-if="
+                  taskId &&
+                  (result?.status === 'pending' || result?.status === 'running')
+                "
                 type="danger"
                 plain
                 size="small"
                 :loading="cancelling"
                 @click="handleCancel"
-                style="margin-left: 12px;"
+                style="margin-left: 12px"
               >
                 取消任务
               </el-button>
@@ -118,15 +121,20 @@
             <!-- Real-time Logs -->
             <div class="status-feed" ref="feedRef">
               <!-- 进度消息（运行中时显示） -->
-              <div v-if="result?.status === 'running' || result?.status === 'pending'" class="progress-msg">
+              <div
+                v-if="
+                  result?.status === 'running' || result?.status === 'pending'
+                "
+                class="progress-msg"
+              >
                 <el-icon class="spin-icon"><Loading /></el-icon>
-                <span>{{ result?.message || '正在处理...' }}</span>
+                <span>{{ result?.message || "正在处理..." }}</span>
                 <el-button
                   v-if="result?.workflowId"
                   text
                   type="primary"
                   size="small"
-                  style="margin-left:auto; flex-shrink:0;"
+                  style="margin-left: auto; flex-shrink: 0"
                   @click="router.push(`/workflow/${result.workflowId}`)"
                 >
                   实时日志
@@ -167,7 +175,7 @@
                       type="warning"
                       show-icon
                       :closable="false"
-                      style="margin-bottom: 16px;"
+                      style="margin-bottom: 16px"
                     />
                   </div>
                   <div
@@ -191,7 +199,9 @@
                       text
                       type="primary"
                       size="small"
-                      @click="router.push(`/workflow/${result.result.workflowId}`)"
+                      @click="
+                        router.push(`/workflow/${result.result.workflowId}`)
+                      "
                     >
                       查看构建详情
                     </el-button>
@@ -253,8 +263,10 @@ import {
   Collection,
 } from "@element-plus/icons-vue";
 import { taskApi, workflowApi } from "../api";
+import { useUserStore } from "../stores/user";
 
 const router = useRouter();
+const userStore = useUserStore();
 const loading = ref(false);
 const cancelling = ref(false);
 const taskId = ref("");
@@ -262,8 +274,8 @@ const result = ref(null);
 const recentWorkflows = ref([]);
 const feedRef = ref(null);
 
-// SSE 连接句柄，用于组件销毁时清理
-let eventSource = null;
+// SSE 连接控制器，用于组件销毁时中止流
+let sseAbortController = null;
 
 // localStorage key：记录进行中的任务，切页面后返回时恢复
 const ACTIVE_TASK_KEY = "agentai_active_task";
@@ -285,12 +297,19 @@ const form = ref({
 const currentStep = computed(() => {
   if (!result.value) return 0;
   const status = result.value.status;
-  const msg = result.value.message || '';
-  if (status === 'success') return 4;
-  if (status === 'failed') return 0;
-  if (msg.includes('架构')) return 1;
-  if (msg.includes('代码') || msg.includes('骨架') || msg.includes('Controller') || msg.includes('前端')) return 2;
-  if (msg.includes('审查') || msg.includes('修复') || msg.includes('完整性')) return 3;
+  const msg = result.value.message || "";
+  if (status === "success") return 4;
+  if (status === "failed") return 0;
+  if (msg.includes("架构")) return 1;
+  if (
+    msg.includes("代码") ||
+    msg.includes("骨架") ||
+    msg.includes("Controller") ||
+    msg.includes("前端")
+  )
+    return 2;
+  if (msg.includes("审查") || msg.includes("修复") || msg.includes("完整性"))
+    return 3;
   return 1;
 });
 
@@ -310,6 +329,8 @@ const handleSubmit = async () => {
     saveActiveTask(res.data.taskId); // 持久化，切页面后可恢复
     ElMessage.success("智能体团队已就绪，开始构建...");
     connectSSE(res.data.taskId);
+    // 后端 @Async 线程会立刻写入 workflow_instance，延迟 800ms 刷新列表以展示新工作流
+    setTimeout(loadRecentWorkflows, 800);
   } catch (error) {
     console.error(error);
     loading.value = false;
@@ -317,47 +338,113 @@ const handleSubmit = async () => {
 };
 
 /**
- * 通过 SSE 订阅任务进度。
- * 服务端每 3 秒推送一次 "update" 事件；任务终态后服务端关闭连接。
- * EventSource 在网络短暂中断时会自动重连，无需手动处理。
+ * 通过 fetch + ReadableStream 实现 SSE 订阅（替代 EventSource）。
+ *
+ * 使用 fetch 的核心原因：EventSource 是浏览器原生 API，不支持自定义请求头，
+ * 因此无法发送 Authorization: Bearer <token>，导致后端权限校验失败。
+ * fetch 可完整控制请求头，且通过 AbortController 主动关闭，不会自动重连。
  */
-const connectSSE = (id) => {
+const connectSSE = async (id) => {
   closeSSE(); // 关闭旧连接（如有）
 
-  const url = `http://localhost:8080/api/agent/task/${id}/stream`;
-  const es = new EventSource(url);
-  eventSource = es;
+  const controller = new AbortController();
+  sseAbortController = controller;
+  let seenWorkflowId = null; // 跟踪 workflowId，首次出现时刷新列表
 
-  es.addEventListener("update", (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      result.value = data;
-      const status = data.status;
-      if (status === "success" || status === "failed" || status === "cancelled") {
-        loading.value = false;
-        cancelling.value = false;
-        clearActiveTask(); // 任务结束，清除持久化记录
-        closeSSE();
-        loadRecentWorkflows();
+  try {
+    const token = userStore.token;
+    const response = await fetch(
+      `http://localhost:8080/api/agent/task/${id}/stream`,
+      {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : "",
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+        signal: controller.signal,
       }
-    } catch (err) {
-      console.error("SSE parse error:", err);
-    }
-  });
+    );
 
-  es.addEventListener("error", () => {
-    if (!eventSource || es.readyState === EventSource.CLOSED) {
-      // 已主动关闭（导航离开）或服务端正常结束流，忽略
+    if (!response.ok) {
+      console.error("SSE 连接失败:", response.status);
+      loading.value = false;
+      clearActiveTask();
       return;
     }
-    // readyState === CONNECTING：网络短暂中断，浏览器正在自动重连，无需干预
-  });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // 循环读取流数据块
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE 事件以 \n\n 分隔
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const eventStr of events) {
+        if (!eventStr.trim()) continue;
+
+        let eventName = "";
+        let eventData = "";
+        for (const line of eventStr.split("\n")) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) eventData = line.slice(5).trim();
+        }
+
+        if (eventName === "update" && eventData) {
+          try {
+            const data = JSON.parse(eventData);
+            result.value = data;
+
+            // workflowId 首次出现（后端 @Async 写库后推送），立刻刷新列表显示新工作流
+            if (data.workflowId && data.workflowId !== seenWorkflowId) {
+              seenWorkflowId = data.workflowId;
+              loadRecentWorkflows();
+            }
+
+            if (
+              data.status === "success" ||
+              data.status === "failed" ||
+              data.status === "cancelled"
+            ) {
+              loading.value = false;
+              cancelling.value = false;
+              clearActiveTask();
+              closeSSE();
+              loadRecentWorkflows(); // 终态刷新：更新真实系统名和最终状态
+              return;
+            }
+          } catch (err) {
+            console.error("SSE parse error:", err);
+          }
+        }
+
+        if (eventName === "error") {
+          console.error("SSE server error:", eventData);
+          loading.value = false;
+          clearActiveTask();
+          closeSSE();
+          return;
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") return; // 主动关闭，正常退出
+    console.error("SSE fetch error:", err);
+    loading.value = false;
+  }
 };
 
 const closeSSE = () => {
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
+  if (sseAbortController) {
+    sseAbortController.abort();
+    sseAbortController = null;
   }
 };
 
@@ -404,7 +491,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  closeSSE(); // 仅关闭连接，不清除 localStorage，返回时可恢复
+  closeSSE(); // 中止 fetch 流，不清除 localStorage，返回时可恢复
 });
 
 const loadRecentWorkflows = async () => {

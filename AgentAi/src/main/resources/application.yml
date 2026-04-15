@@ -89,6 +89,8 @@ mybatis-plus:
 server:
   port: 8080
 
-# E2B 沙箱配置（成本控制：默认 30 分钟超时，仅部署前端）
+# E2B 沙箱配置（由于 REST API 未公开，使用 Node.js 代理服务中转 SDK 调用）
 e2b:
+  proxy-url: "http://localhost:3002"
+  # API Key 现在由 Node.js 代理服务使用，Java 端不再直接使用，但保留作为配置参考
   api-key: "e2b_644445ac0c712ecb58236175a7245fe96f325c67"
